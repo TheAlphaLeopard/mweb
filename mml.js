@@ -3,9 +3,8 @@
 if(location.search.includes('nomods=1'))return;
 
 var mods=[],pending=true,_rel=null;
-
-// ── RSDKv5 ──────────────────────────────────────────────────
 var MG=[0x52,0x53,0x4B,0x44,0x76,0x35];
+
 var R={
 parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
@@ -20,7 +19,11 @@ parse:function(b){
   }
   return{files:f,raw:r};
 },
-_d:function(r,e){var o=[];for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0xFF));return String.fromCharCode.apply(null,o);},
+_d:function(r,e){
+  var o=[];
+  for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0xFF));
+  return String.fromCharCode.apply(null,o);
+},
 build:function(entries){
   var n=entries.length;if(!n)return{files:[],raw:new Uint8Array(0)};
   var hs=16,i;for(i=0;i<n;i++){hs+=entries[i].path.length+1;hs=(hs+3)&~3;hs+=28;}
@@ -46,33 +49,39 @@ build:function(entries){
 },
 merge:function(base,ml){
   var map=new Map(),i,j;
-  for(i=0;i<base.files.length;i++)map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
+  for(i=0;i<base.files.length;i++)
+    map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
   for(i=0;i<ml.length;i++)
     for(j=0;j<ml[i].files.length;j++){
-      var modF=ml[i].files[j],key=modF.name.toLowerCase(),ex=map.get(key);
-      if(ex){
-        // Preserve base filename case for game's strcmp, use mod's data/enc
-        map.set(key,{e:{name:ex.e.name,offset:modF.offset,size:modF.size,enc:modF.enc,md5:modF.md5},s:ml[i].raw});
-      }else{
-        map.set(key,{e:modF,s:ml[i].raw});
-      }
+      var mf=ml[i].files[j],k=mf.name.toLowerCase(),ex=map.get(k);
+      if(ex)map.set(k,{e:{name:ex.e.name,offset:mf.offset,size:mf.size,enc:mf.enc,md5:mf.md5},s:ml[i].raw});
+      else map.set(k,{e:mf,s:ml[i].raw});
     }
   var items=[];for(var v of map.values())items.push(v);
-  var n=items.length,hs=16;for(i=0;i<n;i++){hs+=items[i].e.name.length+1;hs=(hs+3)&~3;hs+=28;}
+  var n=items.length,hs=16;
+  for(i=0;i<n;i++){hs+=items[i].e.name.length+1;hs=(hs+3)&~3;hs+=28;}
   var doff=hs;for(i=0;i<n;i++)items[i].no=doff,doff+=items[i].e.size;
-  var out=new Uint8Array(doff),dv=new DataView(out.buffer);out.set(base.raw.subarray(0,8),0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
-  var p=16;for(i=0;i<n;i++){var e=items[i].e;for(j=0;j<e.name.length;j++)out[p++]=e.name.charCodeAt(j)^(((i+1)*7+j)&0xFF);out[p++]=0;p=(p+3)&~3;dv.setUint32(p,e.size,true);p+=4;dv.setUint32(p,items[i].no,true);p+=4;dv.setUint32(p,e.enc,true);p+=4;out.set(e.md5,p);p+=16;}
+  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
+  out.set(base.raw.subarray(0,8),0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
+  var p=16;
+  for(i=0;i<n;i++){
+    var e=items[i].e;
+    for(j=0;j<e.name.length;j++)out[p++]=e.name.charCodeAt(j)^(((i+1)*7+j)&0xFF);
+    out[p++]=0;p=(p+3)&~3;
+    dv.setUint32(p,e.size,true);p+=4;dv.setUint32(p,items[i].no,true);p+=4;
+    dv.setUint32(p,e.enc,true);p+=4;out.set(e.md5,p);p+=16;
+  }
   for(i=0;i<n;i++){var it=items[i];out.set(it.s.subarray(it.e.offset,it.e.offset+it.e.size),it.no);}
   return out;
 }};
 
-// Strip parent folder, ADD LEADING SLASH to match base RSDK format
 function strip(files){
   if(!files.length)return[];
   var p=files[0].path,i;
   for(i=1;i<files.length;i++){while(p&&!files[i].path.startsWith(p))p=p.slice(0,-1);}
   var s=p.lastIndexOf('/');p=s!==-1?p.substring(0,s+1):'';
-  var out=[];for(i=0;i<files.length;i++){var r=files[i].path.substring(p.length);if(r&&!r.endsWith('/'))out.push({path:'/'+r,data:files[i].data});}
+  var out=[];
+  for(i=0;i<files.length;i++){var r=files[i].path.substring(p.length);if(r&&!r.endsWith('/'))out.push({path:'/'+r,data:files[i].data});}
   return out;
 }
 
@@ -81,72 +90,61 @@ function walk(en,path,out){
     if(en.isFile){en.file(function(f){out.push({file:f,path:path+f.name});ok();});}
     else if(en.isDirectory){
       var rd=en.createReader();
-      (function q(){rd.readEntries(function(b){
-        if(!b.length)ok();
-        else Promise.all(b.map(function(e){return walk(e,path+en.name+'/',out);})).then(q);
-      });})();
+      (function q(){rd.readEntries(function(b){if(!b.length)ok();else Promise.all(b.map(function(e){return walk(e,path+en.name+'/',out);})).then(q);});})();
     }else ok();
   });
 }
 
-// ── XHR delay + subarray bypass ─────────────────────────────
-// External index.js means inline text mutation fails silently.
-// Wrap the delayed XHR's onload to set a flag, and use a targeted
-// subarray patch to prevent truncation if merged RSDK > original size.
+// ── Core: XHR delay → merge → replace response ──────────────
+// Architecture: instead of hooking FS_createDataFile (fragile, scoping issues),
+// we intercept at the XHR layer. When the user clicks Launch, we release the
+// delayed XHR but wrap its onload to:
+//   1. Parse the original index.data response as RSDK
+//   2. Merge with loaded mods
+//   3. Replace xhr.response with the merged ArrayBuffer
+// Then Emscripten's normal onload fires and processes the merged data.
+// The subarray patch prevents the hardcoded "end":208368695 from truncating
+// a merged RSDK that's larger than the original.
 var _xo=XMLHttpRequest.prototype.open,_xs=XMLHttpRequest.prototype.send;
 var _sa=Uint8Array.prototype.subarray;
-function isDataUrl(u){var q=u.indexOf('?');if(q!==-1)u=u.substring(0,q);return u==='index.data'||u.endsWith('/index.data');}
+function isData(u){var q=u.indexOf('?');if(q!==-1)u=u.substring(0,q);return u==='index.data'||u.endsWith('/index.data');}
+
 XMLHttpRequest.prototype.open=function(m,u){this.__mu=u;return _xo.apply(this,arguments);};
 XMLHttpRequest.prototype.send=function(){
-  if(typeof this.__mu==='string'&&isDataUrl(this.__mu)&&pending){
-    var xhr=this, args=arguments;
+  if(typeof this.__mu==='string'&&isData(this.__mu)&&pending){
+    var xhr=this,args=arguments;
     _rel=function(){
-      var origOnload = xhr.onload;
-      xhr.onload = function(e) {
-        try { window.__ml_pkg = true; origOnload.call(this, e); }
-        finally { window.__ml_pkg = false; }
+      var origOL=xhr.onload;
+      xhr.onload=function(ev){
+        if(mods&&mods.length){
+          try{
+            var merged=R.merge(R.parse(new Uint8Array(xhr.response)),mods);
+            mods=null;
+            // Shadow prototype getter with own property on the instance.
+            // Emscripten's onload reads xhr.response — it now gets merged data.
+            Object.defineProperty(xhr,'response',{value:merged.buffer,configurable:true});
+            // Flag for subarray guard
+            window.__ml_bp=true;
+          }catch(err){console.error('[ml]',err);}
+        }
+        if(origOL)origOL.call(this,ev);
+        window.__ml_bp=false;
       };
-      _xs.apply(xhr, args);
+      _xs.apply(xhr,args);
     };
     return;
   }
   return _xs.apply(this,arguments);
 };
+
+// Guard: processPackageData calls byteArray.subarray(0, 208368695).
+// If merged RSDK > 208368695, this would truncate. The flag is only
+// true during the merged onload call, so this is zero-risk to other code.
 Uint8Array.prototype.subarray=function(s,e){
-  if(window.__ml_pkg && s===0 && typeof e==='number' && e < this.byteLength) return _sa.call(this, 0, this.byteLength);
+  if(window.__ml_bp&&s===0&&typeof e==='number'&&e<this.byteLength)
+    return _sa.call(this,0,this.byteLength);
   return _sa.call(this,s,e);
 };
-
-// ── Hook FS_createDataFile ──────────────────────────────────
-window.Module=window.Module||{};
-var _hk=false;
-function hook(orig){
-  if(_hk)return orig;_hk=true;
-  return function(){
-    var a=new Array(arguments.length),i;
-    for(i=0;i<a.length;i++)a[i]=arguments[i];
-    if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&mods&&mods.length){
-      for(i=0;i<a.length;i++){
-        if(a[i] instanceof Uint8Array){
-          try{a[i]=R.merge(R.parse(a[i]),mods);mods=null;}
-          catch(e){console.error('[ml]',e);}
-          break;
-        }
-      }
-    }
-    return orig.apply(this,a);
-  };
-}
-try{
-  Object.defineProperty(Module,'FS_createDataFile',{
-    configurable:true,enumerable:true,
-    get:function(){return this.__m;},
-    set:function(f){this.__m=typeof f==='function'?hook(f):f;}
-  });
-}catch(e){
-  if(typeof Module.FS_createDataFile==='function'&&!_hk)
-    Module.FS_createDataFile=hook(Module.FS_createDataFile);
-}
 
 // ── UI ───────────────────────────────────────────────────────
 var el=document.createElement('div');el.id='ml';
@@ -167,7 +165,7 @@ el.innerHTML=
 '#go{width:100%;padding:5px;background:#070707;border:1px solid #161616;border-radius:2px;color:#222;cursor:pointer;font:inherit;letter-spacing:.05em}'+
 '#go:hover{border-color:#4ade80;color:#4ade80}'+
 '</style>'+
-'<div id="b"><img id=logo src="logo.png"><div id="dz">drop .rsdk or Data/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
+'<div id="b"><div id="dz">drop .rsdk or Data/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
 document.body.appendChild(el);
 
 var ls=el.querySelector('#ls'),dz=el.querySelector('#dz');
