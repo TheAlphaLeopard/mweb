@@ -4,13 +4,13 @@ if(location.search.includes('nomods=1'))return;
 
 var mods=[],pending=true,_rel=null;
 
-// ── RSDKv5 magic: 52 53 4B 44 76 35 ("RSKDv5" on disk) ────
+// ── RSDKv5 ──────────────────────────────────────────────────
 var MG=[0x52,0x53,0x4B,0x44,0x76,0x35];
 var R={
 parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
       d=new DataView(r.buffer,r.byteOffset,r.byteLength),i;
-  for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk file');
+  for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk');
   var n=d.getUint32(8,true),f=[],p=16;
   for(var e=0;e<n;e++){
     var rn=[];while(r[p])rn.push(r[p++]);p=(p+4)&~3;
@@ -24,16 +24,39 @@ _d:function(r,e){var o=[];for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0x
 build:function(entries){
   var n=entries.length;if(!n)return{files:[],raw:new Uint8Array(0)};
   var hs=16,i;for(i=0;i<n;i++){hs+=entries[i].path.length+1;hs=(hs+3)&~3;hs+=28;}
-  var doff=hs,inf=[];for(i=0;i<n;i++){var dl=entries[i].data.byteLength;inf.push({name:entries[i].path,offset:doff,size:dl,enc:0,md5:new Uint8Array(16)});doff+=dl;}
-  var out=new Uint8Array(doff),dv=new DataView(out.buffer);out.set(MG,0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
-  var p=16;for(i=0;i<n;i++){var nm=entries[i].path;for(var j=0;j<nm.length;j++)out[p++]=nm.charCodeAt(j)^(((i+1)*7+j)&0xFF);out[p++]=0;p=(p+3)&~3;dv.setUint32(p,dl,true);p+=4;dv.setUint32(p,inf[i].offset,true);p+=4;dv.setUint32(p,0,true);p+=4;p+=16;}
+  var doff=hs,inf=[];
+  for(i=0;i<n;i++){
+    var dl=entries[i].data.byteLength;
+    inf.push({name:entries[i].path,offset:doff,size:dl,enc:0,md5:new Uint8Array(16)});
+    doff+=dl;
+  }
+  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
+  out.set(MG,0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
+  var p=16;
+  for(i=0;i<n;i++){
+    var nm=entries[i].path;
+    for(var j=0;j<nm.length;j++)out[p++]=nm.charCodeAt(j)^(((i+1)*7+j)&0xFF);
+    out[p++]=0;p=(p+3)&~3;
+    dv.setUint32(p,inf[i].size,true);p+=4;
+    dv.setUint32(p,inf[i].offset,true);p+=4;
+    dv.setUint32(p,0,true);p+=4;p+=16;
+  }
   for(i=0;i<n;i++)out.set(entries[i].data,inf[i].offset);
   return{files:inf,raw:out};
 },
 merge:function(base,ml){
   var map=new Map(),i,j;
   for(i=0;i<base.files.length;i++)map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
-  for(i=0;i<ml.length;i++)for(j=0;j<ml[i].files.length;j++)map.set(ml[i].files[j].name.toLowerCase(),{e:ml[i].files[j],s:ml[i].raw});
+  for(i=0;i<ml.length;i++)
+    for(j=0;j<ml[i].files.length;j++){
+      var modF=ml[i].files[j],key=modF.name.toLowerCase(),ex=map.get(key);
+      if(ex){
+        // Preserve base filename case for game's strcmp, use mod's data/enc
+        map.set(key,{e:{name:ex.e.name,offset:modF.offset,size:modF.size,enc:modF.enc,md5:modF.md5},s:ml[i].raw});
+      }else{
+        map.set(key,{e:modF,s:ml[i].raw});
+      }
+    }
   var items=[];for(var v of map.values())items.push(v);
   var n=items.length,hs=16;for(i=0;i<n;i++){hs+=items[i].e.name.length+1;hs=(hs+3)&~3;hs+=28;}
   var doff=hs;for(i=0;i<n;i++)items[i].no=doff,doff+=items[i].e.size;
@@ -43,12 +66,13 @@ merge:function(base,ml){
   return out;
 }};
 
+// Strip parent folder, ADD LEADING SLASH to match base RSDK format
 function strip(files){
   if(!files.length)return[];
   var p=files[0].path,i;
   for(i=1;i<files.length;i++){while(p&&!files[i].path.startsWith(p))p=p.slice(0,-1);}
   var s=p.lastIndexOf('/');p=s!==-1?p.substring(0,s+1):'';
-  var out=[];for(i=0;i<files.length;i++){var r=files[i].path.substring(p.length);if(r&&!r.endsWith('/'))out.push({path:r,data:files[i].data});}
+  var out=[];for(i=0;i<files.length;i++){var r=files[i].path.substring(p.length);if(r&&!r.endsWith('/'))out.push({path:'/'+r,data:files[i].data});}
   return out;
 }
 
@@ -65,34 +89,35 @@ function walk(en,path,out){
   });
 }
 
-for(var s=0;s<document.scripts.length;s++){
-  var t=document.scripts[s].textContent;
-  if(t&&t.indexOf('Data.rsdk')!==-1&&t.indexOf('loadPackage')!==-1){
-    document.scripts[s].textContent=t
-      .replace(/"end"\s*:\s*\d+/g,'"end":2147483647')
-      .replace(/"remote_package_size"\s*:\s*\d+/g,'"remote_package_size":2147483647');
-    break;
-  }
-}
-
-// ── Delay index.data: pause the ORIGINAL XHR, resume on release ──
-// Previous version spawned a new XHR, which broke because Emscripten's
-// onload closure hardcodes `xhr.status` and `xhr.response` to the
-// original object. Fix: just delay calling send() on the original object.
-// Browsers allow sending an OPENED XHR after any delay.
+// ── XHR delay + subarray bypass ─────────────────────────────
+// External index.js means inline text mutation fails silently.
+// Wrap the delayed XHR's onload to set a flag, and use a targeted
+// subarray patch to prevent truncation if merged RSDK > original size.
 var _xo=XMLHttpRequest.prototype.open,_xs=XMLHttpRequest.prototype.send;
+var _sa=Uint8Array.prototype.subarray;
 function isDataUrl(u){var q=u.indexOf('?');if(q!==-1)u=u.substring(0,q);return u==='index.data'||u.endsWith('/index.data');}
 XMLHttpRequest.prototype.open=function(m,u){this.__mu=u;return _xo.apply(this,arguments);};
 XMLHttpRequest.prototype.send=function(){
   if(typeof this.__mu==='string'&&isDataUrl(this.__mu)&&pending){
     var xhr=this, args=arguments;
-    _rel=function(){ _xs.apply(xhr, args); };
+    _rel=function(){
+      var origOnload = xhr.onload;
+      xhr.onload = function(e) {
+        try { window.__ml_pkg = true; origOnload.call(this, e); }
+        finally { window.__ml_pkg = false; }
+      };
+      _xs.apply(xhr, args);
+    };
     return;
   }
   return _xs.apply(this,arguments);
 };
+Uint8Array.prototype.subarray=function(s,e){
+  if(window.__ml_pkg && s===0 && typeof e==='number' && e < this.byteLength) return _sa.call(this, 0, this.byteLength);
+  return _sa.call(this,s,e);
+};
 
-// ── Hook FS_createDataFile: merge mods into base RSDK ─────────
+// ── Hook FS_createDataFile ──────────────────────────────────
 window.Module=window.Module||{};
 var _hk=false;
 function hook(orig){
