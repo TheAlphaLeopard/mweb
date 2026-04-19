@@ -139,18 +139,6 @@
 		<textarea id="output" style="display: none;" rows="8"></textarea>
 
 		<script type="text/javascript">
-			if ('serviceWorker' in navigator) {
-				navigator.serviceWorker.register('sw.js').then(function(registration) {
-					registration.addEventListener('updatefound', function() {
-						var installingWorker = registration.installing;
-						console.log('A new service worker is being installed:', installingWorker);
-					});
-				}, function(err) {
-					console.log('ServiceWorker registration failed: ', err);
-				});
-			} else {
-				console.log('ServiceWorker not supported');
-			}
 
 			var statusElement = document.getElementById('status');
 			var progressElement = document.getElementById('progress');

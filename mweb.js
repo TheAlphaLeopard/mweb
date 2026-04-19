@@ -2,13 +2,6 @@
 'use strict';
 if(location.search.includes('nomods=1'))return;
 
-// Nuke ghost service workers
-if('serviceWorker' in navigator){
-  navigator.serviceWorker.getRegistrations().then(function(regs){
-    for(var i=0;i<regs.length;i++)regs[i].unregister();
-  });
-}
-
 var mods=[];
 var MG=[0x52,0x53,0x44,0x4B,0x76,0x35];
 var R={
@@ -16,9 +9,7 @@ parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
       d=new DataView(r.buffer,r.byteOffset,r.byteLength),i;
   for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk');
-  var n=d.getUint32(8,true),f=[];
-  var p=this._findDir(r, d.getUint32(12, true));
-  
+  var n=d.getUint32(8,true), p=this._findDir(r), f=[];
   for(var e=0;e<n;e++){
     var rn=[];while(r[p])rn.push(r[p++]);p=(p+4)&~3;
     var sz=d.getUint32(p,true),o=d.getUint32(p+4,true),
@@ -32,29 +23,30 @@ _d:function(r,e){
   for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0xFF));
   return String.fromCharCode.apply(null,o);
 },
-// Ingenious fallback: if we don't know the hash table size,
-// just scan forward until we find a string that decrypts into a valid path.
-_findDir:function(r, hashCount) {
-  var guesses = [];
-  if (hashCount > 0 && hashCount < 100000) {
-    guesses.push(16 + hashCount * 4);
-    guesses.push(16 + hashCount * 8);
-    guesses.push(16 + hashCount * 16);
-  }
-  for (var g = 0; g < guesses.length; g++) {
-    if (this._validEntry(r, guesses[g], 0)) return guesses[g];
-  }
-  // Linear scan fallback
-  for (var i = 16; i < Math.min(r.length, 1048576); i++) {
-    if (this._validEntry(r, i, 0)) return i;
+// Fingerprint scanner: bypass hash table completely by searching
+// for the encrypted '/' character (0x28 for entry 0, 0x21 for entry 1)
+_findDir:function(r) {
+  var limit = Math.min(r.length, 50 * 1024 * 1024);
+  for (var i = 16; i < limit; i++) {
+    if (r[i] === 0x28 && this._validDirStart(r, i)) return i;
   }
   return 16;
 },
+_validDirStart:function(r, start) {
+  if (!this._validEntry(r, start, 0)) return false;
+  var end = start;
+  while (r[end] !== 0) end++;
+  end = (end + 1 + 3) & ~3;
+  end += 28;
+  if (end < r.length && r[end] === 0x21 && this._validEntry(r, end, 1)) return true;
+  return false;
+},
 _validEntry:function(r, start, idx) {
-  if (start >= r.length) return false;
+  if (start >= r.length - 28) return false;
+  if (r[start] === 0) return false;
   var end = start;
   while (end < r.length && r[end] !== 0) end++;
-  if (end === start || r[end] !== 0) return false;
+  if (end === start || end >= r.length) return false;
   var name = this._d(r.slice(start, end), idx);
   if (!name || !name.startsWith('/') || name.length < 2 || name.length > 200) return false;
   for (var i = 0; i < name.length; i++) {
@@ -169,7 +161,7 @@ el.innerHTML=
 '#go{width:100%;padding:5px;background:#070707;border:1px solid #161616;border-radius:2px;color:#222;cursor:pointer;font:inherit;letter-spacing:.05em}'+
 '#go:hover{border-color:#4ade80;color:#4ade80}'+
 '</style>'+
-'<div id="b"><div id="dz">drop .rsdk or Data folder/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
+'<div id="b"><div id="dz">drop .rsdk or Data/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
 document.body.appendChild(el);
 
 var ls=el.querySelector('#ls'),dz=el.querySelector('#dz');
