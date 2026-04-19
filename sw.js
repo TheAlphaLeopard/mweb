@@ -3,7 +3,7 @@ var _cacheFiles = [
 	'index.html',
 	'index.js',
 	'index.wasm',
-  'https://files.catbox.moe/xsfgty.rsdk'
+    'xsfgtj.rsdk'
 ];
 	
 self.addEventListener('install', (e) => {
