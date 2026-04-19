@@ -34,7 +34,7 @@ merge:function(base,ml){
   var map=new Map(),i,j;
   for(i=0;i<base.files.length;i++)map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
   for(i=0;i<ml.length;i++)for(j=0;j<ml[i].files.length;j++)map.set(ml[i].files[j].name.toLowerCase(),{e:ml[i].files[j],s:ml[i].raw});
-  var items=[];for(var v of map.values())items.push(v),n=items.length;
+  var items=[];for(var v of map.values())items.push(v);
   var n=items.length,hs=16;for(i=0;i<n;i++){hs+=items[i].e.name.length+1;hs=(hs+3)&~3;hs+=28;}
   var doff=hs;for(i=0;i<n;i++)items[i].no=doff,doff+=items[i].e.size;
   var out=new Uint8Array(doff),dv=new DataView(out.buffer);out.set(base.raw.subarray(0,8),0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
@@ -43,7 +43,6 @@ merge:function(base,ml){
   return out;
 }};
 
-// ── Strip common parent directory from file paths ────────────
 function strip(files){
   if(!files.length)return[];
   var p=files[0].path,i;
@@ -53,7 +52,6 @@ function strip(files){
   return out;
 }
 
-// ── Recursively walk drag-dropped directory entries ───────────
 function walk(en,path,out){
   return new Promise(function(ok){
     if(en.isFile){en.file(function(f){out.push({file:f,path:path+f.name});ok();});}
@@ -67,7 +65,6 @@ function walk(en,path,out){
   });
 }
 
-// ── Fix subarray truncation in Emscripten's inline metadata ──
 for(var s=0;s<document.scripts.length;s++){
   var t=document.scripts[s].textContent;
   if(t&&t.indexOf('Data.rsdk')!==-1&&t.indexOf('loadPackage')!==-1){
@@ -78,25 +75,18 @@ for(var s=0;s<document.scripts.length;s++){
   }
 }
 
-// ── Delay index.data: capture handlers, spawn fresh XHR on release ──
-// Previous approach of re-sending on the old XHR object failed because
-// browsers can reject send() on a stale OPENED XHR after extended delay.
-// Solution: capture url + handlers, create a brand new XHR when releasing.
+// ── Delay index.data: pause the ORIGINAL XHR, resume on release ──
+// Previous version spawned a new XHR, which broke because Emscripten's
+// onload closure hardcodes `xhr.status` and `xhr.response` to the
+// original object. Fix: just delay calling send() on the original object.
+// Browsers allow sending an OPENED XHR after any delay.
 var _xo=XMLHttpRequest.prototype.open,_xs=XMLHttpRequest.prototype.send;
 function isDataUrl(u){var q=u.indexOf('?');if(q!==-1)u=u.substring(0,q);return u==='index.data'||u.endsWith('/index.data');}
 XMLHttpRequest.prototype.open=function(m,u){this.__mu=u;return _xo.apply(this,arguments);};
 XMLHttpRequest.prototype.send=function(){
   if(typeof this.__mu==='string'&&isDataUrl(this.__mu)&&pending){
-    var url=this.__mu,ol=this.onload,oe=this.onerror,op=this.onprogress;
-    _rel=function(){
-      var x=new XMLHttpRequest();
-      x.open('GET',url,true);
-      x.responseType='arraybuffer';
-      if(op)x.onprogress=op;
-      if(oe)x.onerror=oe;
-      x.onload=ol;
-      x.send(null);
-    };
+    var xhr=this, args=arguments;
+    _rel=function(){ _xs.apply(xhr, args); };
     return;
   }
   return _xs.apply(this,arguments);
@@ -169,8 +159,7 @@ fi.onchange=function(){if(fi.files.length)(async function(){for(var i=0;i<fi.fil
 di.onchange=function(){
   if(!di.files.length)return;
   var files=Array.from(di.files).map(function(f){return{file:f,path:f.webkitRelativePath};});
-  adf(files,files[0].path.split('/')[0]);
-  di.value='';
+  adf(files,files[0].path.split('/')[0]);di.value='';
 };
 ls.onclick=function(e){if(e.target.classList.contains('x')){mods.splice(+e.target.dataset.i,1);ren();}};
 dz.ondragover=function(e){e.preventDefault();dz.classList.add('ov');};
