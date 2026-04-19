@@ -2,15 +2,10 @@
 'use strict';
 if(location.search.includes('nomods=1'))return;
 
-// Nuke ghost service workers and caches
+// Nuke ghost service workers completely
 if('serviceWorker' in navigator){
   navigator.serviceWorker.getRegistrations().then(function(r){
     for(var i=0;i<r.length;i++)r[i].unregister();
-  });
-}
-if(window.caches){
-  window.caches.keys().then(function(n){
-    for(var i=0;i<n.length;i++)window.caches.delete(n[i]);
   });
 }
 
@@ -21,10 +16,19 @@ parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
       d=new DataView(r.buffer,r.byteOffset,r.byteLength),i;
   for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk');
-  var n=d.getUint32(8,true),h=d.getUint32(12,true),p=16+h*4,f=[];
+  var n=d.getUint32(8,true),h=d.getUint32(12,true);
+  
+  // GOD-TIER SAFETY: Mathematically guarantees we never read out of bounds,
+  // even if the RSDK header hash table is corrupted or weird.
+  var maxHash=Math.floor((r.length-16)/4);
+  if(h>maxHash)h=0; 
+  var p=16+h*4;
+  
   if(p>=r.length)throw new Error('Invalid RSDK header');
+  var f=[];
   for(var e=0;e<n;e++){
     var rn=[];while(r[p])rn.push(r[p++]);p=(p+4)&~3;
+    if(p+28>r.length)break; // Prevent edge-case overflows
     var sz=d.getUint32(p,true),o=d.getUint32(p+4,true),
         en=d.getUint32(p+8,true),md=r.slice(p+12,p+28);p+=28;
     f.push({name:this._d(rn,e),offset:o,size:sz,enc:en,md5:md});
@@ -35,6 +39,55 @@ _d:function(r,e){
   var o=[];
   for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0xFF));
   return String.fromCharCode.apply(null,o);
+},
+build:function(entries){
+  var n=entries.length;if(!n)return{files:[],raw:new Uint8Array(0)};
+  var hs=16,i;for(i=0;i<n;i++){hs+=entries[i].path.length+1;hs=(hs+3)&~3;hs+=28;}
+  var doff=hs,inf=[];
+  for(i=0;i<n;i++){
+    var dl=entries[i].data.byteLength;
+    inf.push({name:entries[i].path,offset:doff,size:dl,enc:0,md5:new Uint8Array(16)});
+    doff+=dl;
+  }
+  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
+  out.set(MG,0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
+  var p=16;
+  for(i=0;i<n;i++){
+    var nm=entries[i].path;
+    for(var j=0;j<nm.length;j++)out[p++]=nm.charCodeAt(j)^(((i+1)*7+j)&0xFF);
+    out[p++]=0;p=(p+3)&~3;
+    dv.setUint32(p,inf[i].size,true);p+=4;
+    dv.setUint32(p,inf[i].offset,true);p+=4;
+    dv.setUint32(p,0,true);p+=4;p+=16;
+  }
+  for(i=0;i<n;i++)out.set(entries[i].data,inf[i].offset);
+  return{files:inf,raw:out};
+},
+merge:function(base,ml){
+  var map=new Map(),i,j;
+  for(i=0;i<base.files.length;i++)map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
+  for(i=0;i<ml.length;i++)
+    for(j=0;j<ml[i].files.length;j++){
+      var mf=ml[i].files[j],k=mf.name.toLowerCase(),ex=map.get(k);
+      if(ex)map.set(k,{e:{name:ex.e.name,offset:mf.offset,size:mf.size,enc:mf.enc,md5:mf.md5},s:ml[i].raw});
+      else map.set(k,{e:mf,s:ml[i].raw});
+    }
+  var items=[];for(var v of map.values())items.push(v);
+  var n=items.length,hs=16;
+  for(i=0;i<n;i++){hs+=items[i].e.name.length+1;hs=(hs+3)&~3;hs+=28;}
+  var doff=hs;for(i=0;i<n;i++)items[i].no=doff,doff+=items[i].e.size;
+  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
+  out.set(base.raw.subarray(0,8),0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
+  var p=16;
+  for(i=0;i<n;i++){
+    var e=items[i].e;
+    for(j=0;j<e.name.length;j++)out[p++]=e.name.charCodeAt(j)^(((i+1)*7+j)&0xFF);
+    out[p++]=0;p=(p+3)&~3;
+    dv.setUint32(p,e.size,true);p+=4;dv.setUint32(p,items[i].no,true);p+=4;
+    dv.setUint32(p,e.enc,true);p+=4;out.set(e.md5,p);p+=16;
+  }
+  for(i=0;i<n;i++){var it=items[i];out.set(it.s.subarray(it.e.offset,it.e.offset+it.e.size),it.no);}
+  return out;
 }};
 
 function strip(files){
@@ -60,47 +113,39 @@ function walk(en,path,out){
   });
 }
 
-// Inject mods natively into MEMFS
-function injectMods(){
-  if(!mods||!mods.length)return;
-  try{
-    var FS=Module.FS;
-    mods.forEach(function(mod,idx){
-      var dir='Mods/mod'+idx;
-      
-      mod.files.forEach(function(f){
-        // Map exactly to the mod's internal folder structure
-        var fullPath = dir + f.name; 
-        var parts = fullPath.split('/');
-        parts.pop(); // remove filename
-        var fDir = parts.join('/');
-        
-        if(fDir) FS.createPath('/', fDir, true, true);
-        
-        var data=mod.raw?mod.raw.subarray(f.offset,f.offset+f.size):f.data;
-        FS.createDataFile(fullPath, null, data, true, true, true);
-      });
-
-      // Engine strictly requires mod.ini in the mod root to load it
-      var hasIni = mod.files.some(function(f){ return f.name.toLowerCase() === '/mod.ini'; });
-      if(!hasIni){
-         var ini="[Mod]\r\nName="+mod._l+"\r\nVersion=1.0.0\r\n";
-         FS.createDataFile(dir+'/mod.ini',null,new TextEncoder().encode(ini),true,true,true);
-      }
-    });
-    mods=null;
-    console.log('%c[mml]%c mods injected','color:#4ade80;font-weight:bold','color:inherit');
-  }catch(e){console.error('[mml]',e);}
-}
-
+// ── THE POST-CREATE OVERWRITE (The True MML Architecture) ────
+// 1. Wait for Emscripten to finish downloading and writing /Data.rsdk
+// 2. Grab the 208MB Uint8Array directly from the arguments
+// 3. Parse, merge, and overwrite the file in MEMFS
+// 4. Engine's C++ main() starts, reads the modified RSDK, mods are active.
 window.Module=window.Module||{};
 var _hk=false;
 function hook(orig){
   if(_hk)return orig;_hk=true;
   return function(){
-    var res=orig.apply(this,arguments);
-    if(arguments[0]==='/Data.rsdk'||arguments[0]==='Data.rsdk')injectMods();
-    return res;
+    var a=arguments;
+    if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&mods&&mods.length&&a[2] instanceof Uint8Array){
+      var baseData=a[2];
+      // 1. Let Emscripten write the base file normally to avoid dependency crashes
+      var res=orig.apply(this,a);
+      
+      try{
+        // 2. Parse the base file
+        var base=R.parse(baseData);
+        
+        // 3. Merge
+        var merged=R.merge(base,mods);
+        mods=null;
+        
+        // 4. Overwrite in MEMFS before the engine reads it
+        Module.FS.writeFile('/Data.rsdk', merged);
+        console.log('%c[mml]%c base merged & overwritten ('+(merged.byteLength/1048576).toFixed(1)+'MB)','color:#4ade80;font-weight:bold','color:inherit');
+      }catch(e){
+        console.error('[mml] merge failed:',e);
+      }
+      return res;
+    }
+    return orig.apply(this,a);
   };
 }
 try{
@@ -133,7 +178,7 @@ el.innerHTML=
 '#go{width:100%;padding:5px;background:#070707;border:1px solid #161616;border-radius:2px;color:#222;cursor:pointer;font:inherit;letter-spacing:.05em}'+
 '#go:hover{border-color:#4ade80;color:#4ade80}'+
 '</style>'+
-'<div id="b"><div id="dz">drop .rsdk or Data idk/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
+'<div id="b"><div id="dz">drop .rsdk or Data if u want/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
 document.body.appendChild(el);
 
 var ls=el.querySelector('#ls'),dz=el.querySelector('#dz');
@@ -142,12 +187,7 @@ var di=document.createElement('input');di.type='file';di.webkitdirectory=true;di
 
 function ren(){ls.innerHTML='';for(var i=0;i<mods.length;i++){var d=document.createElement('div');d.className='r';d.innerHTML='<span>'+mods[i]._l+'</span><span class="x" data-i="'+i+'">\u00d7</span>';ls.appendChild(d);}}
 
-function go(){
-  el.classList.add('off');
-  setTimeout(function(){
-    var s=document.createElement('script');s.src='index.js';document.body.appendChild(s);
-  }, 10);
-}
+function go(){el.classList.add('off');}
 
 el.querySelector('#go').onclick=go;
 dz.onclick=function(){fi.click();};
@@ -187,13 +227,14 @@ async function adf(fl,lb){
     }));
     var ent=strip(bs);if(!ent.length)throw new Error('empty folder');
     
-    // Smart fix: If user uploaded the Data/ folder directly, prepend /Data
+    // If user uploaded loose Game/Sprites/etc folders, wrap them in /Data/
     var hasData = ent.some(function(f){ return f.name.startsWith('/Data/'); });
     if(!hasData && (ent.some(function(f){ return f.name.startsWith('/Game/'); }) || ent.some(function(f){ return f.name.startsWith('/Sprites/'); }))) {
       ent.forEach(function(f){ f.name = '/Data' + f.name; });
     }
     
-    mods.push({files:ent,_l:lb||'mod',raw:null});
+    // Build a valid RSDK from the folder files to merge into the base
+    var r=R.build(ent);r._l=lb||'mod';mods.push(r);
   }catch(e){alert(e.message);}
   ren();
 }
