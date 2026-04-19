@@ -2,9 +2,8 @@
 'use strict';
 if(location.search.includes('nomods=1'))return;
 
-var mods=[],pending=true,_rel=null;
+var mods=[];
 var MG=[0x52,0x53,0x4B,0x44,0x76,0x35];
-
 var R={
 parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
@@ -49,8 +48,7 @@ build:function(entries){
 },
 merge:function(base,ml){
   var map=new Map(),i,j;
-  for(i=0;i<base.files.length;i++)
-    map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
+  for(i=0;i<base.files.length;i++)map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
   for(i=0;i<ml.length;i++)
     for(j=0;j<ml[i].files.length;j++){
       var mf=ml[i].files[j],k=mf.name.toLowerCase(),ex=map.get(k);
@@ -95,55 +93,18 @@ function walk(en,path,out){
   });
 }
 
-// ── Core: XHR delay → merge → replace response ──────────────
-// Architecture: instead of hooking FS_createDataFile (fragile, scoping issues),
-// we intercept at the XHR layer. When the user clicks Launch, we release the
-// delayed XHR but wrap its onload to:
-//   1. Parse the original index.data response as RSDK
-//   2. Merge with loaded mods
-//   3. Replace xhr.response with the merged ArrayBuffer
-// Then Emscripten's normal onload fires and processes the merged data.
-// The subarray patch prevents the hardcoded "end":208368695 from truncating
-// a merged RSDK that's larger than the original.
-var _xo=XMLHttpRequest.prototype.open,_xs=XMLHttpRequest.prototype.send;
-var _sa=Uint8Array.prototype.subarray;
-function isData(u){var q=u.indexOf('?');if(q!==-1)u=u.substring(0,q);return u==='index.data'||u.endsWith('/index.data');}
-
-XMLHttpRequest.prototype.open=function(m,u){this.__mu=u;return _xo.apply(this,arguments);};
-XMLHttpRequest.prototype.send=function(){
-  if(typeof this.__mu==='string'&&isData(this.__mu)&&pending){
-    var xhr=this,args=arguments;
-    _rel=function(){
-      var origOL=xhr.onload;
-      xhr.onload=function(ev){
-        if(mods&&mods.length){
-          try{
-            var merged=R.merge(R.parse(new Uint8Array(xhr.response)),mods);
-            mods=null;
-            // Shadow prototype getter with own property on the instance.
-            // Emscripten's onload reads xhr.response — it now gets merged data.
-            Object.defineProperty(xhr,'response',{value:merged.buffer,configurable:true});
-            // Flag for subarray guard
-            window.__ml_bp=true;
-          }catch(err){console.error('[ml]',err);}
-        }
-        if(origOL)origOL.call(this,ev);
-        window.__ml_bp=false;
-      };
-      _xs.apply(xhr,args);
-    };
-    return;
+// Clean hook: index.js calls this synchronously inside its own XHR onload.
+window.__mml_merge = function(buf) {
+  if(!mods||!mods.length) return buf;
+  try {
+    var merged = R.merge(R.parse(new Uint8Array(buf)), mods);
+    mods = null; // free mod memory immediately
+    console.log('%c[mml]%c merged','color:#4ade80;font-weight:bold','color:inherit');
+    return merged.buffer;
+  } catch(e) {
+    console.error('[mml]', e);
+    return buf; // fallback to unmodified if merge fails
   }
-  return _xs.apply(this,arguments);
-};
-
-// Guard: processPackageData calls byteArray.subarray(0, 208368695).
-// If merged RSDK > 208368695, this would truncate. The flag is only
-// true during the merged onload call, so this is zero-risk to other code.
-Uint8Array.prototype.subarray=function(s,e){
-  if(window.__ml_bp&&s===0&&typeof e==='number'&&e<this.byteLength)
-    return _sa.call(this,0,this.byteLength);
-  return _sa.call(this,s,e);
 };
 
 // ── UI ───────────────────────────────────────────────────────
@@ -173,7 +134,12 @@ var fi=document.createElement('input');fi.type='file';fi.accept='.rsdk';fi.multi
 var di=document.createElement('input');di.type='file';di.webkitdirectory=true;di.style.display='none';document.body.appendChild(di);
 
 function ren(){ls.innerHTML='';for(var i=0;i<mods.length;i++){var d=document.createElement('div');d.className='r';d.innerHTML='<span>'+mods[i]._l+'</span><span class="x" data-i="'+i+'">\u00d7</span>';ls.appendChild(d);}}
-function go(){pending=false;el.classList.add('off');if(_rel){_rel();_rel=null;}}
+function go(){
+  el.classList.add('off');
+  // Dynamically inject index.js ONLY after mods are loaded.
+  // This guarantees __mml_merge is active when loadPackage runs.
+  var s=document.createElement('script');s.src='index.js';document.body.appendChild(s);
+}
 
 el.querySelector('#go').onclick=go;
 dz.onclick=function(){fi.click();};
