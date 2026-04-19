@@ -465,7 +465,7 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
 // end include: web_or_worker_shell_read.js
   }
 
-  setWindowTitle = (title) => document.title = "Sonic Mania - mmlweb";
+  setWindowTitle = (title) => document.title = "mweb";
 } else
 {
   throw new Error('environment detection error');
