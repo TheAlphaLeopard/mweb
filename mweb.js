@@ -10,6 +10,8 @@ if('serviceWorker' in navigator){
 
 var mods=[];
 var MG=[0x52,0x53,0x44,0x4B,0x76,0x35];
+var baseFiles=null, modMap=new Map(), lastMatch=-1;
+
 var R={
 parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
@@ -34,34 +36,72 @@ _d:function(r,e){
   var o=[];
   for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0xFF));
   return String.fromCharCode.apply(null,o);
-},
-merge:function(base,ml){
-  var map=new Map(),i,j,overwrites=0;
-  for(i=0;i<base.files.length;i++)map.set(base.files[i].name.toLowerCase(),{e:base.files[i],s:base.raw});
-  for(i=0;i<ml.length;i++)
-    for(j=0;j<ml[i].files.length;j++){
-      var mf=ml[i].files[j],k=mf.name.toLowerCase(),ex=map.get(k);
-      if(ex){map.set(k,{e:{name:ex.e.name,offset:mf.offset,size:mf.size,enc:mf.enc,md5:mf.md5},s:ml[i].raw});overwrites++;}
-      else map.set(k,{e:mf,s:ml[i].raw});
-    }
-  var items=[];for(var v of map.values())items.push(v);
-  var n=items.length,hs=16;
-  for(i=0;i<n;i++){hs+=items[i].e.name.length+1;hs=(hs+3)&~3;hs+=28;}
-  var doff=hs;for(i=0;i<n;i++)items[i].no=doff,doff+=items[i].e.size;
-  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
-  out.set(base.raw.subarray(0,8),0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
-  var p=16;
-  for(i=0;i<n;i++){
-    var e=items[i].e;
-    for(j=0;j<e.name.length;j++)out[p++]=e.name.charCodeAt(j)^(((i+1)*7+j)&0xFF);
-    out[p++]=0;p=(p+3)&~3;
-    dv.setUint32(p,e.size,true);p+=4;dv.setUint32(p,items[i].no,true);p+=4;
-    dv.setUint32(p,e.enc,true);p+=4;out.set(e.md5,p);p+=16;
-  }
-  for(i=0;i<n;i++){var it=items[i];out.set(it.s.subarray(it.e.offset,it.e.offset+it.e.size),it.no);}
-  console.log('%c[mml]%c Merge complete: '+base.files.length+' base + '+overwrites+' mod overwrites = '+n+' total files','color:#60a5fa;font-weight:bold','color:inherit');
-  return out;
 }};
+
+// ── The MML Architecture: Hook FS.read instead of merging ──
+function hookFS(){
+  var origCreate = FS.createDataFile;
+  FS.createDataFile = function(){
+    var res = origCreate.apply(this, arguments);
+    if ((arguments[0]==='/Data.rsdk'||arguments[0]==='Data.rsdk')&&arguments[2] instanceof Uint8Array&&mods.length>0){
+      try{
+        // 1. Parse base file ONLY to get the offset map (fast, no data copying)
+        baseFiles = R.parse(arguments[2]).files;
+        
+        // 2. Build mod map: lowercase path -> mod data slice
+        mods.forEach(function(mod){
+          mod.files.forEach(function(f){
+            if(!modMap.has(f.name.toLowerCase())){
+              modMap.set(f.name.toLowerCase(), mod.raw.subarray(f.offset, f.offset + f.size));
+            }
+          });
+        });
+        mods = null;
+        console.log('%c[mml]%c Base indexed ('+baseFiles.length+' files). Mod map ready ('+modMap.size+' overrides).','color:#60a5fa;font-weight:bold','color:inherit');
+      }catch(e){console.error('[mml] Index failed:',e);}
+    }
+    return res;
+  };
+
+  var origRead = FS.read;
+  FS.read = function(stream, buffer, offset, length, position){
+    // Only intercept reads from the base RSDK
+    if(stream.path==='/Data.rsdk' && modMap.size>0 && baseFiles){
+      var pos = position!==undefined ? position : stream.position;
+      
+      // Find which file the engine is trying to read
+      var fIdx = lastMatch;
+      if(fIdx>=0 && pos>=baseFiles[fIdx].offset && pos<baseFiles[fIdx].offset+baseFiles[fIdx].size){
+        // Optimization: Still reading the same file as last time
+      } else {
+        // Find the file using offset bounds
+        fIdx = -1;
+        for(var i=0; i<baseFiles.length; i++){
+          if(pos>=baseFiles[i].offset && pos<baseFiles[i].offset+baseFiles[i].size){
+            fIdx = i; break;
+          }
+        }
+        lastMatch = fIdx;
+      }
+      
+      // If we found a file, check if we have a mod override
+      if(fIdx!==-1){
+        var file = baseFiles[fIdx];
+        var modData = modMap.get(file.name.toLowerCase());
+        if(modData){
+          // Write mod data directly into the WASM heap buffer!
+          var readOffset = pos - file.offset;
+          var readLen = Math.min(length, modData.length - readOffset);
+          if(readLen > 0){
+            buffer.set(modData.subarray(readOffset, readOffset + readLen), offset);
+          }
+          return readLen;
+        }
+      }
+    }
+    return origRead.apply(this, arguments);
+  };
+}
 
 window.Module=window.Module||{};
 var _hk=false;
@@ -69,27 +109,15 @@ function hook(orig){
   if(_hk)return orig;_hk=true;
   return function(){
     var a=arguments;
-    if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&mods&&mods.length&&a[2] instanceof Uint8Array){
-      var baseData=a[2];
+    if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&a[2] instanceof Uint8Array){
       var res=orig.apply(this,a);
-      try{
-        console.log('%c[mml]%c Base RSDK intercepted ('+formatBytes(baseData.byteLength)+'). Parsing...','color:#fbbf24;font-weight:bold','color:inherit');
-        var base=R.parse(baseData);
-        console.log('%c[mml]%c Base parsed: '+base.files.length+' files. Merging '+mods.length+' mods...','color:#fbbf24;font-weight:bold','color:inherit');
-        var merged=R.merge(base,mods);
-        mods=null;
-        Module.FS.writeFile('/Data.rsdk', merged);
-        console.log('%c[mml]%c SUCCESS! VFS overwritten with '+(merged.byteLength/1048576).toFixed(1)+'MB','color:#4ade80;font-weight:bold','color:inherit');
-      }catch(e){
-        console.error('%c[mml]%c FATAL ERROR DURING MERGE:','color:#f87171;font-weight:bold','color:inherit', e);
-      }
+      // Hook FS immediately after it's initialized
+      if(!baseFiles && Module.FS && Module.FS.read) hookFS();
       return res;
     }
     return orig.apply(this,a);
   };
 }
-function formatBytes(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB';}
-
 try{
   Object.defineProperty(Module,'FS_createDataFile',{
     configurable:true,enumerable:true,
@@ -151,7 +179,7 @@ async function af(f){
     var b=await f.arrayBuffer(),r=R.parse(new Uint8Array(b));
     r._l=f.name.replace(/\.rsdk$/i,'');
     mods.push(r);
-    console.log('[mml] Loaded mod: '+r._l+' ('+formatBytes(b.byteLength)+', '+r.files.length+' files)');
+    console.log('[mml] Loaded: '+r._l+' ('+r.files.length+' files)');
   }catch(e){alert(f.name+': '+e.message);}
 }
 
