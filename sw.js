@@ -2,6 +2,7 @@ var _cacheName = 'sonicmania-9282022';
 var _cacheFiles = [
 	'index.html',
 	'index.js',
+	'mml.js',
 	'index.wasm',
     'xsfgtj.rsdk'
 ];
