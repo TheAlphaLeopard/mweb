@@ -10,26 +10,38 @@ if('serviceWorker' in navigator){
 
 var mods=[];
 var MG=[0x52,0x53,0x44,0x4B,0x76,0x35];
-var baseFiles=null, modMap=new Map(), lastMatch=-1;
+function formatBytes(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB';}
 
 var R={
 parse:function(b){
+  console.log('%c[mml][RSDK] Parsing buffer ('+formatBytes(b.byteLength)+')...','color:#60a5fa;font-weight:bold','color:inherit');
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
       d=new DataView(r.buffer,r.byteOffset,r.byteLength),i;
-  for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk');
+      
+  var magicStr='';for(i=0;i<6;i++) magicStr+=String.fromCharCode(r[i]);
+  console.log('[mml][RSDK] Magic: "'+magicStr+'"');
+  for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk (Got: "'+magicStr+'")');
+      
   var n=d.getUint32(8,true),h=d.getUint32(12,true);
+  console.log('[mml][RSDK] Files: '+n+', Hash Table Size: '+h);
+      
   var maxHash=Math.floor((r.length-16)/4);
-  if(h>maxHash)h=0; 
+  if(h>maxHash){console.log('[mml][RSDK] Hash table too large, clamping to 0.');h=0;}
   var p=16+h*4;
   if(p>=r.length)throw new Error('Invalid RSDK header');
+  console.log('[mml][RSDK] Directory starts at byte offset: '+p);
+      
   var f=[];
   for(var e=0;e<n;e++){
-    var rn=[];while(r[p])rn.push(r[p++]);p=(p+4)&~3;
+    var rn=[];while(r[p]&&p<r.length)rn.push(r[p++]);p=(p+4)&~3;
     if(p+28>r.length)break; 
     var sz=d.getUint32(p,true),o=d.getUint32(p+4,true),
         en=d.getUint32(p+8,true),md=r.slice(p+12,p+28);p+=28;
-    f.push({name:this._d(rn,e),offset:o,size:sz,enc:en,md5:md});
+    var name=this._d(rn,e);
+    f.push({name:name,offset:o,size:sz,enc:en,md5:md});
+    if(e<5) console.log('[mml][RSDK]   '+e+'. "'+name+'" @ offset '+o+' ('+formatBytes(sz)+')');
   }
+  console.log('[mml][RSDK] Parsed '+f.length+' files successfully.');
   return{files:f,raw:r};
 },
 _d:function(r,e){
@@ -38,68 +50,81 @@ _d:function(r,e){
   return String.fromCharCode.apply(null,o);
 }};
 
-// ── The MML Architecture: Hook FS.read instead of merging ──
+// ── THE TRUE MML ARCHITECTURE ────────────────────────────────
 function hookFS(){
+  console.log('%c[mml]%c Waiting for Emscripten to write /Data.rsdk to MEMFS...','color:#60a5fa;font-weight:bold;font-size:14px','color:inherit');
+
   var origCreate = FS.createDataFile;
   FS.createDataFile = function(){
     var res = origCreate.apply(this, arguments);
-    if ((arguments[0]==='/Data.rsdk'||arguments[0]==='Data.rsdk')&&arguments[2] instanceof Uint8Array&&mods.length>0){
-      try{
-        // 1. Parse base file ONLY to get the offset map (fast, no data copying)
-        baseFiles = R.parse(arguments[2]).files;
+    
+    if ((arguments[0]==='/Data.rsdk'||arguments[0]==='Data.rsdk') && mods.length > 0) {
+      try {
+        console.log('[mml] >>> /Data.rsdk WRITE INTERCEPTED! <<<');
         
-        // 2. Build mod map: lowercase path -> mod data slice
-        mods.forEach(function(mod){
-          mod.files.forEach(function(f){
-            if(!modMap.has(f.name.toLowerCase())){
-              modMap.set(f.name.toLowerCase(), mod.raw.subarray(f.offset, f.offset + f.size));
+        // Get the MEMFS node directly
+        var node = FS.analyzePath('/Data.rsdk').node;
+        if (!node) { console.error('[mml] ERROR: Could not find MEMFS node!'); return res; }
+        
+        var oldContents = node.contents;
+        console.log('[mml] Got MEMFS node. Type: '+(oldContents instanceof Uint8Array?'Uint8Array':typeof oldContents)+', Size: '+formatBytes(oldContents.byteLength));
+
+        // CRITICAL SAFETY: Detach from the XHR ArrayBuffer. 
+        // Emscripten might garbage-collect the XHR buffer later, which would
+        // detach our Uint8Array and corrupt the game if we don't copy it now.
+        console.log('[mml] Copying base data to new ArrayBuffer (safe from GC)...');
+        var newBuffer = new ArrayBuffer(oldContents.byteLength);
+        var contents = new Uint8Array(newBuffer);
+        contents.set(oldContents);
+        node.contents = contents; // Replace node contents with our safe copy!
+        console.log('[mml] Safely detached from XHR buffer.');
+
+        // 1. Parse base to get exact file offsets
+        console.log('[mml] Parsing base file offsets...');
+        var base = R.parse(contents);
+        console.log('[mml] Base indexed: '+base.files.length+' files.');
+
+        // 2. Apply mod patches IN-PLACE to the safe copy
+        mods.forEach(function(mod, modIdx) {
+          console.log('%c[mml]%c Processing mod "'+mod._l+'" ('+formatBytes(mod.raw.byteLength)+')...','color:#fbbf24;font-weight:bold','color:inherit');
+          var overrides=0, skipped=0, corrupted=[];
+          
+          mod.files.forEach(function(f) {
+            var key = f.name.toLowerCase();
+            for(var i=0;i<base.files.length;i++){
+              if(base.files[i].name.toLowerCase() === key){
+                var baseOffset = base.files[i].offset;
+                var baseSize = base.files[i].size;
+                var modData = mod.raw.subarray(f.offset, f.offset + f.size);
+                
+                // OVERWRITE base bytes with mod bytes at the exact base offset!
+                contents.set(modData, baseOffset);
+                overrides++;
+                
+                if(modData.length > baseSize) {
+                  corrupted.push(key+' ('+formatBytes(baseSize)+' -> '+formatBytes(modData.length)+')');
+                  console.warn('[mml]   WARNING: Larger than base! (will overwrite next file): '+corrupted[corrupted.length-1]);
+                }
+                break;
+              }
             }
           });
+          
+          console.log('[mml] "'+mod._l+'": '+overrides+' overrides applied, '+skipped+' new files skipped.');
+          if(corrupted.length>0) console.warn('[mml] Total files larger than base: '+corrupted.length+' (MML accepts this behavior)');
         });
-        mods = null;
-        console.log('%c[mml]%c Base indexed ('+baseFiles.length+' files). Mod map ready ('+modMap.size+' overrides).','color:#60a5fa;font-weight:bold','color:inherit');
-      }catch(e){console.error('[mml] Index failed:',e);}
+        
+        mods = null; // Free mod memory
+        console.log('%c[mml]%c PATCHING COMPLETE! All mods written directly into MEMFS node.','color:#4ade80;font-weight:bold;font-size:14px','color:inherit');
+        console.log('[mml] The engine will now read the modded data naturally via standard FS.read().');
+        
+      } catch(e) {
+        console.error('%c[mml]%c FATAL ERROR DURING PATCHING:','color:#f87171;font-weight:bold','color:inherit');
+        console.error(e.stack || e.message);
+      }
     }
+    
     return res;
-  };
-
-  var origRead = FS.read;
-  FS.read = function(stream, buffer, offset, length, position){
-    // Only intercept reads from the base RSDK
-    if(stream.path==='/Data.rsdk' && modMap.size>0 && baseFiles){
-      var pos = position!==undefined ? position : stream.position;
-      
-      // Find which file the engine is trying to read
-      var fIdx = lastMatch;
-      if(fIdx>=0 && pos>=baseFiles[fIdx].offset && pos<baseFiles[fIdx].offset+baseFiles[fIdx].size){
-        // Optimization: Still reading the same file as last time
-      } else {
-        // Find the file using offset bounds
-        fIdx = -1;
-        for(var i=0; i<baseFiles.length; i++){
-          if(pos>=baseFiles[i].offset && pos<baseFiles[i].offset+baseFiles[i].size){
-            fIdx = i; break;
-          }
-        }
-        lastMatch = fIdx;
-      }
-      
-      // If we found a file, check if we have a mod override
-      if(fIdx!==-1){
-        var file = baseFiles[fIdx];
-        var modData = modMap.get(file.name.toLowerCase());
-        if(modData){
-          // Write mod data directly into the WASM heap buffer!
-          var readOffset = pos - file.offset;
-          var readLen = Math.min(length, modData.length - readOffset);
-          if(readLen > 0){
-            buffer.set(modData.subarray(readOffset, readOffset + readLen), offset);
-          }
-          return readLen;
-        }
-      }
-    }
-    return origRead.apply(this, arguments);
   };
 }
 
@@ -112,7 +137,7 @@ function hook(orig){
     if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&a[2] instanceof Uint8Array){
       var res=orig.apply(this,a);
       // Hook FS immediately after it's initialized
-      if(!baseFiles && Module.FS && Module.FS.read) hookFS();
+      if(Module.FS && Module.FS.createDataFile && Module.FS.analyzePath) hookFS();
       return res;
     }
     return orig.apply(this,a);
@@ -179,7 +204,7 @@ async function af(f){
     var b=await f.arrayBuffer(),r=R.parse(new Uint8Array(b));
     r._l=f.name.replace(/\.rsdk$/i,'');
     mods.push(r);
-    console.log('[mml] Loaded: '+r._l+' ('+r.files.length+' files)');
+    console.log('[mml] Loaded: '+r._l+' ('+formatBytes(b.byteLength)+', '+r.files.length+' files)');
   }catch(e){alert(f.name+': '+e.message);}
 }
 
