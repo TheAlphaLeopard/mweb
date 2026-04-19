@@ -2,7 +2,7 @@
 'use strict';
 if(location.search.includes('nomods=1'))return;
 
-// Nuke ghost service workers completely
+// Nuke ghost service workers
 if('serviceWorker' in navigator){
   navigator.serviceWorker.getRegistrations().then(function(r){
     for(var i=0;i<r.length;i++)r[i].unregister();
@@ -18,8 +18,7 @@ parse:function(b){
   for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk');
   var n=d.getUint32(8,true),h=d.getUint32(12,true);
   
-  // GOD-TIER SAFETY: Mathematically guarantees we never read out of bounds,
-  // even if the RSDK header hash table is corrupted or weird.
+  // Safety: Prevent out-of-bounds if hash table size is corrupted
   var maxHash=Math.floor((r.length-16)/4);
   if(h>maxHash)h=0; 
   var p=16+h*4;
@@ -39,29 +38,6 @@ _d:function(r,e){
   var o=[];
   for(var i=0;i<r.length;i++)o.push(r[i]^(((e+1)*7+i)&0xFF));
   return String.fromCharCode.apply(null,o);
-},
-build:function(entries){
-  var n=entries.length;if(!n)return{files:[],raw:new Uint8Array(0)};
-  var hs=16,i;for(i=0;i<n;i++){hs+=entries[i].path.length+1;hs=(hs+3)&~3;hs+=28;}
-  var doff=hs,inf=[];
-  for(i=0;i<n;i++){
-    var dl=entries[i].data.byteLength;
-    inf.push({name:entries[i].path,offset:doff,size:dl,enc:0,md5:new Uint8Array(16)});
-    doff+=dl;
-  }
-  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
-  out.set(MG,0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
-  var p=16;
-  for(i=0;i<n;i++){
-    var nm=entries[i].path;
-    for(var j=0;j<nm.length;j++)out[p++]=nm.charCodeAt(j)^(((i+1)*7+j)&0xFF);
-    out[p++]=0;p=(p+3)&~3;
-    dv.setUint32(p,inf[i].size,true);p+=4;
-    dv.setUint32(p,inf[i].offset,true);p+=4;
-    dv.setUint32(p,0,true);p+=4;p+=16;
-  }
-  for(i=0;i<n;i++)out.set(entries[i].data,inf[i].offset);
-  return{files:inf,raw:out};
 },
 merge:function(base,ml){
   var map=new Map(),i,j;
@@ -90,34 +66,12 @@ merge:function(base,ml){
   return out;
 }};
 
-function strip(files){
-  if(!files.length)return[];
-  var p=files[0].path,i;
-  for(i=1;i<files.length;i++){while(p&&!files[i].path.startsWith(p))p=p.slice(0,-1);}
-  var s=p.lastIndexOf('/');p=s!==-1?p.substring(0,s+1):'';
-  var out=[];
-  for(i=0;i<files.length;i++){
-    var r=files[i].path.substring(p.length);
-    if(r&&!r.endsWith('/'))out.push({name:'/'+r,data:files[i].data});
-  }
-  return out;
-}
-
-function walk(en,path,out){
-  return new Promise(function(ok){
-    if(en.isFile){en.file(function(f){out.push({file:f,path:path+f.name});ok();});}
-    else if(en.isDirectory){
-      var rd=en.createReader();
-      (function q(){rd.readEntries(function(b){if(!b.length)ok();else Promise.all(b.map(function(e){return walk(e,path+en.name+'/',out);})).then(q);});})();
-    }else ok();
-  });
-}
-
-// ── THE POST-CREATE OVERWRITE (The True MML Architecture) ────
-// 1. Wait for Emscripten to finish downloading and writing /Data.rsdk
-// 2. Grab the 208MB Uint8Array directly from the arguments
-// 3. Parse, merge, and overwrite the file in MEMFS
-// 4. Engine's C++ main() starts, reads the modified RSDK, mods are active.
+// ── VFS Emulation: Intercept Emscripten MEMFS Write ──────────
+// 1. Emscripten writes /Data.rsdk from the 208MB download
+// 2. We let it finish to resolve XHR dependencies
+// 3. We grab the 208MB buffer, merge with mods
+// 4. We silently overwrite the file in MEMFS using FS.writeFile
+// 5. Engine's C++ main() starts, reads the modified RSDK
 window.Module=window.Module||{};
 var _hk=false;
 function hook(orig){
@@ -126,23 +80,15 @@ function hook(orig){
     var a=arguments;
     if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&mods&&mods.length&&a[2] instanceof Uint8Array){
       var baseData=a[2];
-      // 1. Let Emscripten write the base file normally to avoid dependency crashes
+      // 1. Write base file normally (critical for Emscripten dependency tracking)
       var res=orig.apply(this,a);
-      
       try{
-        // 2. Parse the base file
-        var base=R.parse(baseData);
-        
-        // 3. Merge
-        var merged=R.merge(base,mods);
+        // 2. Parse, merge, overwrite
+        var merged=R.merge(R.parse(baseData),mods);
         mods=null;
-        
-        // 4. Overwrite in MEMFS before the engine reads it
         Module.FS.writeFile('/Data.rsdk', merged);
-        console.log('%c[mml]%c base merged & overwritten ('+(merged.byteLength/1048576).toFixed(1)+'MB)','color:#4ade80;font-weight:bold','color:inherit');
-      }catch(e){
-        console.error('[mml] merge failed:',e);
-      }
+        console.log('%c[mml]%c vfs overwritten ('+(merged.byteLength/1048576).toFixed(1)+'MB)','color:#4ade80;font-weight:bold','color:inherit');
+      }catch(e){console.error('[mml]',e);}
       return res;
     }
     return orig.apply(this,a);
@@ -168,8 +114,6 @@ el.innerHTML=
 '#b{background:#0a0a0a;border:1px solid #161616;border-radius:2px;padding:14px 16px;width:210px;font:11px/1.4 monospace;color:#2a2a2a}'+
 '#dz{border:1px dashed #181818;padding:10px;text-align:center;cursor:pointer;color:#222;margin-bottom:5px}'+
 '#dz:hover,#dz.ov{border-color:#4ade80;color:#4ade80}'+
-'#fd{display:block;text-align:center;font-size:9px;color:#181818;margin-bottom:7px;cursor:pointer}'+
-'#fd:hover{color:#4ade80}'+
 '#ls{max-height:80px;overflow-y:auto;margin-bottom:7px}'+
 '#ls:empty::after{content:"-";display:block;text-align:center;color:#161616;font-size:10px}'+
 '.r{display:flex;justify-content:space-between;padding:1px 0;font-size:10px}'+
@@ -178,26 +122,18 @@ el.innerHTML=
 '#go{width:100%;padding:5px;background:#070707;border:1px solid #161616;border-radius:2px;color:#222;cursor:pointer;font:inherit;letter-spacing:.05em}'+
 '#go:hover{border-color:#4ade80;color:#4ade80}'+
 '</style>'+
-'<div id="b"><div id="dz">drop .rsdk or Data if u want/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
+'<div id="b"><div id="dz">drop .rsdk</div><div id="ls"></div><button id="go">launch</button></div>';
 document.body.appendChild(el);
 
 var ls=el.querySelector('#ls'),dz=el.querySelector('#dz');
 var fi=document.createElement('input');fi.type='file';fi.accept='.rsdk';fi.multiple=true;fi.style.display='none';document.body.appendChild(fi);
-var di=document.createElement('input');di.type='file';di.webkitdirectory=true;di.style.display='none';document.body.appendChild(di);
 
 function ren(){ls.innerHTML='';for(var i=0;i<mods.length;i++){var d=document.createElement('div');d.className='r';d.innerHTML='<span>'+mods[i]._l+'</span><span class="x" data-i="'+i+'">\u00d7</span>';ls.appendChild(d);}}
-
 function go(){el.classList.add('off');}
 
 el.querySelector('#go').onclick=go;
 dz.onclick=function(){fi.click();};
-el.querySelector('#fd').onclick=function(e){e.preventDefault();di.click();};
 fi.onchange=function(){if(fi.files.length)(async function(){for(var i=0;i<fi.files.length;i++)await af(fi.files[i]);ren();})();fi.value='';};
-di.onchange=function(){
-  if(!di.files.length)return;
-  var files=Array.from(di.files).map(function(f){return{file:f,path:f.webkitRelativePath};});
-  adf(files,files[0].path.split('/')[0]);di.value='';
-};
 ls.onclick=function(e){if(e.target.classList.contains('x')){mods.splice(+e.target.dataset.i,1);ren();}};
 dz.ondragover=function(e){e.preventDefault();dz.classList.add('ov');};
 dz.ondragleave=function(){dz.classList.remove('ov');};
@@ -207,9 +143,8 @@ el.ondrop=async function(e){
   var it=e.dataTransfer.items;if(!it)return;
   for(var i=0;i<it.length;i++){
     var en=it[i].webkitGetAsEntry&&it[i].webkitGetAsEntry();
-    if(!en){var f=it[i].getAsFile();if(f)await af(f);continue;}
+    if(!en)continue;
     if(en.isFile)await af(await new Promise(function(r){en.file(r);}));
-    else if(en.isDirectory){var c=[];await walk(en,'',c);adf(c,c[0]?c[0].path.split('/')[0]:'mod');}
   }
   ren();
 };
@@ -218,25 +153,6 @@ async function af(f){
   if(!f.name.toLowerCase().endsWith('.rsdk'))return;
   try{var b=await f.arrayBuffer(),r=R.parse(new Uint8Array(b));r._l=f.name.replace(/\.rsdk$/i,'');mods.push(r);}
   catch(e){alert(f.name+': '+e.message);}
-}
-
-async function adf(fl,lb){
-  try{
-    var bs=await Promise.all(fl.map(function(f){
-      return f.file.arrayBuffer().then(function(b){return{path:f.path,data:new Uint8Array(b)};});
-    }));
-    var ent=strip(bs);if(!ent.length)throw new Error('empty folder');
-    
-    // If user uploaded loose Game/Sprites/etc folders, wrap them in /Data/
-    var hasData = ent.some(function(f){ return f.name.startsWith('/Data/'); });
-    if(!hasData && (ent.some(function(f){ return f.name.startsWith('/Game/'); }) || ent.some(function(f){ return f.name.startsWith('/Sprites/'); }))) {
-      ent.forEach(function(f){ f.name = '/Data' + f.name; });
-    }
-    
-    // Build a valid RSDK from the folder files to merge into the base
-    var r=R.build(ent);r._l=lb||'mod';mods.push(r);
-  }catch(e){alert(e.message);}
-  ren();
 }
 
 })();
