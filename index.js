@@ -40,8 +40,8 @@ var Module = typeof Module != 'undefined' ? Module : {};
         // web worker
         PACKAGE_PATH = encodeURIComponent(location.pathname.toString().substring(0, location.pathname.toString().lastIndexOf('/')) + '/');
       }
-      var PACKAGE_NAME = 'https://media.githubusercontent.com/media/wyattthewyattman/Sonic-Mania-Web/main/index.data';
-      var REMOTE_PACKAGE_BASE = 'https://media.githubusercontent.com/media/wyattthewyattman/Sonic-Mania-Web/main/index.data';
+      var PACKAGE_NAME = 'index.data';
+      var REMOTE_PACKAGE_BASE = 'index.data';
       if (typeof Module['locateFilePackage'] === 'function' && !Module['locateFile']) {
         Module['locateFile'] = Module['locateFilePackage'];
         err('warning: you defined Module.locateFilePackage, that has been renamed to Module.locateFile (using your locateFilePackage for now)');
@@ -171,10 +171,10 @@ var REMOTE_PACKAGE_SIZE = metadata['remote_package_size'];
           var files = metadata['files'];
           for (var i = 0; i < files.length; ++i) {
             DataRequest.prototype.requests[files[i].filename].onload();
-          }          Module['removeRunDependency']('https://media.githubusercontent.com/media/Zero0xx/Sonic-Mania-Web/main/index.data');
+          }          Module['removeRunDependency']('index.data');
 
       };
-      Module['addRunDependency']('https://media.githubusercontent.com/media/wyattthewyattman/Sonic-Mania-Web/main/index.data');
+      Module['addRunDependency']('index.data');
 
       if (!Module.preloadResults) Module.preloadResults = {};
 
