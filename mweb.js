@@ -14,23 +14,14 @@ function formatBytes(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFix
 
 var R={
 parse:function(b){
-  console.log('%c[mml][RSDK] Parsing buffer ('+formatBytes(b.byteLength)+')...','color:#60a5fa;font-weight:bold','color:inherit');
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
       d=new DataView(r.buffer,r.byteOffset,r.byteLength),i;
-      
-  var magicStr='';for(i=0;i<6;i++) magicStr+=String.fromCharCode(r[i]);
-  console.log('[mml][RSDK] Magic: "'+magicStr+'"');
-  for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk (Got: "'+magicStr+'")');
-      
+  for(i=0;i<6;i++)if(r[i]!==MG[i])throw new Error('Invalid .rsdk');
   var n=d.getUint32(8,true),h=d.getUint32(12,true);
-  console.log('[mml][RSDK] Files: '+n+', Hash Table Size: '+h);
-      
   var maxHash=Math.floor((r.length-16)/4);
-  if(h>maxHash){console.log('[mml][RSDK] Hash table too large, clamping to 0.');h=0;}
+  if(h>maxHash)h=0; 
   var p=16+h*4;
   if(p>=r.length)throw new Error('Invalid RSDK header');
-  console.log('[mml][RSDK] Directory starts at byte offset: '+p);
-      
   var f=[];
   for(var e=0;e<n;e++){
     var rn=[];while(r[p]&&p<r.length)rn.push(r[p++]);p=(p+4)&~3;
@@ -39,9 +30,7 @@ parse:function(b){
         en=d.getUint32(p+8,true),md=r.slice(p+12,p+28);p+=28;
     var name=this._d(rn,e);
     f.push({name:name,offset:o,size:sz,enc:en,md5:md});
-    if(e<5) console.log('[mml][RSDK]   '+e+'. "'+name+'" @ offset '+o+' ('+formatBytes(sz)+')');
   }
-  console.log('[mml][RSDK] Parsed '+f.length+' files successfully.');
   return{files:f,raw:r};
 },
 _d:function(r,e){
@@ -50,109 +39,77 @@ _d:function(r,e){
   return String.fromCharCode.apply(null,o);
 }};
 
-// ── THE TRUE MML ARCHITECTURE ────────────────────────────────
-function hookFS(){
-  console.log('%c[mml]%c Waiting for Emscripten to write /Data.rsdk to MEMFS...','color:#60a5fa;font-weight:bold;font-size:14px','color:inherit');
+console.log('%c[mml]%c Waiting for Emscripten FS...','color:#60a5fa;font-weight:bold','color:inherit');
 
-  var origCreate = FS.createDataFile;
-  FS.createDataFile = function(){
-    var res = origCreate.apply(this, arguments);
+var pollId = setInterval(function() {
+  if (typeof FS !== 'undefined' && typeof FS.createDataFile === 'function') {
+    clearInterval(pollId);
+    console.log('%c[mml]%c FS found! Installing patch...','color:#4ade80;font-weight:bold','color:inherit');
     
-    if ((arguments[0]==='/Data.rsdk'||arguments[0]==='Data.rsdk') && mods.length > 0) {
-      try {
-        console.log('[mml] >>> /Data.rsdk WRITE INTERCEPTED! <<<');
-        
-        // Get the MEMFS node directly
-        var node = FS.analyzePath('/Data.rsdk').node;
-        if (!node) { console.error('[mml] ERROR: Could not find MEMFS node!'); return res; }
-        
-        var oldContents = node.contents;
-        console.log('[mml] Got MEMFS node. Type: '+(oldContents instanceof Uint8Array?'Uint8Array':typeof oldContents)+', Size: '+formatBytes(oldContents.byteLength));
-
-        // CRITICAL SAFETY: Detach from the XHR ArrayBuffer. 
-        // Emscripten might garbage-collect the XHR buffer later, which would
-        // detach our Uint8Array and corrupt the game if we don't copy it now.
-        console.log('[mml] Copying base data to new ArrayBuffer (safe from GC)...');
-        var newBuffer = new ArrayBuffer(oldContents.byteLength);
-        var contents = new Uint8Array(newBuffer);
-        contents.set(oldContents);
-        node.contents = contents; // Replace node contents with our safe copy!
-        console.log('[mml] Safely detached from XHR buffer.');
-
-        // 1. Parse base to get exact file offsets
-        console.log('[mml] Parsing base file offsets...');
-        var base = R.parse(contents);
-        console.log('[mml] Base indexed: '+base.files.length+' files.');
-
-        // 2. Apply mod patches IN-PLACE to the safe copy
-        mods.forEach(function(mod, modIdx) {
-          console.log('%c[mml]%c Processing mod "'+mod._l+'" ('+formatBytes(mod.raw.byteLength)+')...','color:#fbbf24;font-weight:bold','color:inherit');
-          var overrides=0, skipped=0, corrupted=[];
+    var origCreate = FS.createDataFile;
+    FS.createDataPass = origCreate; // Backup original just in case
+    
+    FS.createDataFile = function(path, data, canRead, canWrite, canDelete, canOwn) {
+      // MUST pass arguments explicitly. Emscripten's path.resolve() 
+      // will crash if we pass the 'arguments' object directly.
+      var res = origCreate(path, data, canRead, canWrite, canDelete, canOwn);
+      
+      if ((path==='/Data.rsdk'||path==='Data.rsdk') && data instanceof Uint8Array && mods.length > 0) {
+        try {
+          console.log('%c[mml]%c >>> /Data.rsdk INTERCEPTED <<<','color:#f472b6;font-weight:bold;font-size:14px','color:inherit');
           
-          mod.files.forEach(function(f) {
-            var key = f.name.toLowerCase();
-            for(var i=0;i<base.files.length;i++){
-              if(base.files[i].name.toLowerCase() === key){
-                var baseOffset = base.files[i].offset;
-                var baseSize = base.files[i].size;
-                var modData = mod.raw.subarray(f.offset, f.offset + f.size);
-                
-                // OVERWRITE base bytes with mod bytes at the exact base offset!
-                contents.set(modData, baseOffset);
-                overrides++;
-                
-                if(modData.length > baseSize) {
-                  corrupted.push(key+' ('+formatBytes(baseSize)+' -> '+formatBytes(modData.length)+')');
-                  console.warn('[mml]   WARNING: Larger than base! (will overwrite next file): '+corrupted[corrupted.length-1]);
+          var node = FS.analyzePath('/Data.rsdk').node;
+          if (!node) { console.error('[mml] ERROR: MEMFS node not found!'); return res; }
+          
+          var oldContents = node.contents;
+          console.log('[mml] Node size: '+formatBytes(oldContents.byteLength));
+
+          // SAFETY: Copy to prevent XHR GC from detaching buffer
+          console.log('[mml] Detaching from XHR...');
+          var contents = new Uint8Array(oldContents.byteLength);
+          contents.set(oldContents);
+          node.contents = contents;
+
+          // Parse base to get file offsets
+          console.log('[mml] Parsing offsets...');
+          var base = R.parse(contents);
+
+          // Patch!
+          mods.forEach(function(mod) {
+            console.log('[mml] Patching: '+mod._l);
+            var overrides=0;
+            
+            mod.files.forEach(function(f) {
+              var key = f.name.toLowerCase();
+              for(var i=0;i<base.files.length;i++){
+                if(base.files[i].name.toLowerCase() === key){
+                  var baseOffset = base.files[i].offset;
+                  var modData = mod.raw.subarray(f.offset, f.offset + f.size);
+                  contents.set(modData, baseOffset);
+                  overrides++;
+                  break;
                 }
-                break;
               }
-            }
+            });
+            
+            console.log('[mml] Applied '+overrides+' overrides.');
           });
           
-          console.log('[mml] "'+mod._l+'": '+overrides+' overrides applied, '+skipped+' new files skipped.');
-          if(corrupted.length>0) console.warn('[mml] Total files larger than base: '+corrupted.length+' (MML accepts this behavior)');
-        });
-        
-        mods = null; // Free mod memory
-        console.log('%c[mml]%c PATCHING COMPLETE! All mods written directly into MEMFS node.','color:#4ade80;font-weight:bold;font-size:14px','color:inherit');
-        console.log('[mml] The engine will now read the modded data naturally via standard FS.read().');
-        
-      } catch(e) {
-        console.error('%c[mml]%c FATAL ERROR DURING PATCHING:','color:#f87171;font-weight:bold','color:inherit');
-        console.error(e.stack || e.message);
+          mods = null;
+          console.log('%c[mml]%c SUCCESS! Megamix is now active in memory.','color:#4ade80;font-weight:bold;font-size:14px','color:inherit');
+          
+        } catch(e) {
+          console.error('%c[mml]%c FATAL:','color:#f87171;font-weight:bold','color:inherit',e);
+        }
       }
-    }
-    
-    return res;
-  };
-}
-
-window.Module=window.Module||{};
-var _hk=false;
-function hook(orig){
-  if(_hk)return orig;_hk=true;
-  return function(){
-    var a=arguments;
-    if((a[0]==='/Data.rsdk'||a[0]==='Data.rsdk')&&a[2] instanceof Uint8Array){
-      var res=orig.apply(this,a);
-      // Hook FS immediately after it's initialized
-      if(Module.FS && Module.FS.createDataFile && Module.FS.analyzePath) hookFS();
+      
       return res;
-    }
-    return orig.apply(this,a);
-  };
-}
-try{
-  Object.defineProperty(Module,'FS_createDataFile',{
-    configurable:true,enumerable:true,
-    get:function(){return this.__m;},
-    set:function(f){this.__m=typeof f==='function'?hook(f):f;}
-  });
-}catch(e){
-  if(typeof Module.FS_createDataFile==='function'&&!_hk)
-    Module.FS_createDataFile=hook(Module.FS_createDataFile);
-}
+    };
+    
+    // Restore normal behavior for all other files
+    FS.createDataFile = origCreate;
+  }
+}, 10);
 
 // ── UI ───────────────────────────────────────────────────────
 var el=document.createElement('div');el.id='ml';
@@ -204,7 +161,7 @@ async function af(f){
     var b=await f.arrayBuffer(),r=R.parse(new Uint8Array(b));
     r._l=f.name.replace(/\.rsdk$/i,'');
     mods.push(r);
-    console.log('[mml] Loaded: '+r._l+' ('+formatBytes(b.byteLength)+', '+r.files.length+' files)');
+    console.log('[mml] Loaded: '+r._l+' ('+formatBytes(b.byteLength)+')');
   }catch(e){alert(f.name+': '+e.message);}
 }
 
