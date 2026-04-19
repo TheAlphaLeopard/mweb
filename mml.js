@@ -142,7 +142,7 @@ el.innerHTML=
 '#go{width:100%;padding:5px;background:#070707;border:1px solid #161616;border-radius:2px;color:#222;cursor:pointer;font:inherit;letter-spacing:.05em}'+
 '#go:hover{border-color:#4ade80;color:#4ade80}'+
 '</style>'+
-'<div id="b"><div id="dz">drop .rsdk or Data/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
+'<div id="b"><img id=logo src="logo.png"><div id="dz">drop .rsdk or Data/</div><a id="fd">pick folder</a><div id="ls"></div><button id="go">launch</button></div>';
 document.body.appendChild(el);
 
 var ls=el.querySelector('#ls'),dz=el.querySelector('#dz');
