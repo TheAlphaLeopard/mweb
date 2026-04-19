@@ -3,7 +3,8 @@
 if(location.search.includes('nomods=1'))return;
 
 var mods=[];
-var MG=[0x52,0x53,0x4B,0x44,0x76,0x35];
+// "RSDKv5" = 52 53 44 4B 76 35
+var MG=[0x52,0x53,0x44,0x4B,0x76,0x35];
 var R={
 parse:function(b){
   var r=b instanceof Uint8Array?b:new Uint8Array(b),
@@ -93,17 +94,16 @@ function walk(en,path,out){
   });
 }
 
-// Clean hook: index.js calls this synchronously inside its own XHR onload.
 window.__mml_merge = function(buf) {
   if(!mods||!mods.length) return buf;
   try {
     var merged = R.merge(R.parse(new Uint8Array(buf)), mods);
-    mods = null; // free mod memory immediately
-    console.log('%c[mml]%c merged','color:#4ade80;font-weight:bold','color:inherit');
+    mods = null;
+    console.log('%c[mml]%c mods active','color:#4ade80;font-weight:bold','color:inherit');
     return merged.buffer;
   } catch(e) {
     console.error('[mml]', e);
-    return buf; // fallback to unmodified if merge fails
+    return buf;
   }
 };
 
@@ -136,8 +136,6 @@ var di=document.createElement('input');di.type='file';di.webkitdirectory=true;di
 function ren(){ls.innerHTML='';for(var i=0;i<mods.length;i++){var d=document.createElement('div');d.className='r';d.innerHTML='<span>'+mods[i]._l+'</span><span class="x" data-i="'+i+'">\u00d7</span>';ls.appendChild(d);}}
 function go(){
   el.classList.add('off');
-  // Dynamically inject index.js ONLY after mods are loaded.
-  // This guarantees __mml_merge is active when loadPackage runs.
   var s=document.createElement('script');s.src='index.js';document.body.appendChild(s);
 }
 
