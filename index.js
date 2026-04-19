@@ -98,7 +98,7 @@ var REMOTE_PACKAGE_SIZE = metadata['remote_package_size'];
         }
         xhr.onload = function(event) {
           if (xhr.status == 200 || xhr.status == 304 || xhr.status == 206 || (xhr.status == 0 && xhr.response)) { // file URLs can return 0
-            var packageData = window.__mml_merge ? window.__mml_merge(xhr.response) : xhr.response;
+            var packageData = xhr.response;
             callback(packageData);
           } else {
             throw new Error(xhr.statusText + " : " + xhr.responseURL);
@@ -195,7 +195,7 @@ var REMOTE_PACKAGE_SIZE = metadata['remote_package_size'];
     }
 
     }
-    loadPackage({"files": [{"filename": "/Data.rsdk", "start": 0, "end": 2147483647}], "remote_package_size": 2147483647});
+    loadPackage({"files": [{"filename": "/Data.rsdk", "start": 0, "end": 208368695}], "remote_package_size": 208368695});
 
   })();
 
