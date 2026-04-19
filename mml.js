@@ -166,7 +166,12 @@ el.querySelector('#go').onclick=go;
 dz.onclick=function(){fi.click();};
 el.querySelector('#fd').onclick=function(e){e.preventDefault();di.click();};
 fi.onchange=function(){if(fi.files.length)(async function(){for(var i=0;i<fi.files.length;i++)await af(fi.files[i]);ren();})();fi.value='';};
-di.onchange=function(){if(di.files.length)adf(di.files,di.files[0].webkitRelativePath.split('/')[0]);di.value='';};
+di.onchange=function(){
+  if(!di.files.length)return;
+  var files=Array.from(di.files).map(function(f){return{file:f,path:f.webkitRelativePath};});
+  adf(files,files[0].path.split('/')[0]);
+  di.value='';
+};
 ls.onclick=function(e){if(e.target.classList.contains('x')){mods.splice(+e.target.dataset.i,1);ren();}};
 dz.ondragover=function(e){e.preventDefault();dz.classList.add('ov');};
 dz.ondragleave=function(){dz.classList.remove('ov');};
