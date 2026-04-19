@@ -195,7 +195,7 @@ var REMOTE_PACKAGE_SIZE = metadata['remote_package_size'];
     }
 
     }
-    loadPackage({"files": [{"filename": "/Data.rsdk", "start": 0, "end": 208368695}], "remote_package_size": 208368695});
+    loadPackage({"files": [{"filename": "/Data.rsdk", "start": 0, "end": 2147483647}], "remote_package_size": 2147483647});
 
   })();
 

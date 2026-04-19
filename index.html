@@ -1,224 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mod Packer</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:#0a0908;font-family:'Noto Sans',sans-serif;color:#888;font-size:12px}
+#ui{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:10}
+.p{width:500px;max-height:85vh;overflow-y:auto;background:#0c0b0a;border:1px solid #1c1a18;border-top:2px solid #b87a28;padding:18px 14px 14px}
+.h{font-size:10px;font-weight:700;color:#b87a28;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px}
+.h span{color:#3a3530;font-weight:400}
+.sub{font-size:10px;color:#3a3530;margin-bottom:12px}
+.dz{border:1px dashed #28241e;padding:14px;text-align:center;cursor:pointer;font-size:11px;color:#38342e;transition:border-color .1s,color .1s;margin-bottom:10px}
+.dz:hover,.dz.ov{border-color:#b87a28;color:#776a55}
+.dz.has{border-color:#3da34d;border-style:solid;color:#3da34d}
+.sec{margin:10px 0 5px;font-size:9px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.8px;padding-bottom:2px;border-bottom:1px solid #141210}
+.row{display:flex;padding:1px 0;font-size:10px}.row .k{color:#555;min-width:100px}.row .v{color:#888;flex:1}
+.row .v.g{color:#3da34d}.row .v.a{color:#b87a28}.row .v.r{color:#c93030}
+.pat{background:#080705;border:1px solid #141210;padding:4px 7px;margin:2px 0;font-size:10px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pat .sym{color:#b87a28;min-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pat .b{color:#555;font-family:monospace;font-size:9px}.pat .ar{color:#333}.pat .rep{color:#3da34d;font-family:monospace;font-size:9px}
+.pat .m{color:#333;font-size:9px;margin-left:auto}
+.tag{font-size:8px;padding:1px 4px;border-radius:2px;font-weight:600;display:inline-block;margin-left:3px}
+.tag.data{background:#1a2e1a;color:#3da34d}.tag.hook{background:#2e2a1a;color:#b87a28}.tag.guess{background:#2e2a1a;color:#666}
+.err{color:#c93030;font-size:10px;padding:2px 0}
+.total{display:flex;gap:10px;margin:6px 0;font-size:10px}
+.total .g{color:#3da34d}.total .a{color:#b87a28}.total .d{color:#555}
+.btns{display:flex;gap:6px;margin-top:12px}
+.btn{flex:1;padding:8px;border:1px solid #28241e;background:transparent;color:#555;font-family:inherit;font-size:9px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;cursor:pointer;transition:background .1s,border-color .1s,color .1s}
+.btn:hover:not(:disabled){background:#b87a28;border-color:#b87a28;color:#0a0908}
+.btn:disabled{opacity:.2;cursor:not-allowed}
+.dl{border:1px solid #141210;padding:5px 7px;margin:2px 0;font-size:10px;cursor:pointer;transition:border-color .1s}
+.dl:hover{border-color:#28241e}
+.dl .dn{color:#999;font-weight:600}.dl .ds{font-size:9px;color:#444;margin-top:1px}
+.dd{display:none;padding:4px 0 4px 8px;border-left:1px solid #1c1a18;margin:2px 0 2px 3px}
+.dd.show{display:block}
+</style>
+</head>
+<body>
+<div id="ui"><div class="p">
+<div class="h">Mod Packer <span>// analyze + package</span></div>
+<div class="sub">Drop mod ZIP, DLLs, or Data.rsdk. Produces a ready-to-use loader package.</div>
+<div class="dz" id="dz">drop mod files here</div>
+<div id="out"></div>
+<div class="btns" id="btns" style="display:none">
+<button class="btn" id="dlBtn" disabled>download mod package</button>
+</div>
+</div></div>
+<input type="file" id="fi" accept=".dll,.zip,.rsdk,.bin" multiple hidden>
+<script type="module">
+import*as fflate from'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
 
-<!doctype html>
-<!--suppress HtmlFormInputWithoutLabel, JSDeprecatedSymbols -->
-<html lang="en-us">
-	<head>
-		<meta charset="utf-8" />
-		<link rel="icon" href="favicon.png" type="image/png">
-		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+const dz=document.getElementById('dz'),fi=document.getElementById('fi'),out=document.getElementById('out');
+let pkgData=null;
 
-		<title>Mania Web - mweb</title>
+dz.onclick=()=>fi.click();
+dz.ondragover=e=>{e.preventDefault();dz.classList.add('ov');};
+dz.ondragleave=()=>dz.classList.remove('ov');
+dz.ondrop=e=>{e.preventDefault();dz.classList.remove('ov');handle(Array.from(e.dataTransfer.files));};
+fi.onchange=()=>{if(fi.files.length)handle(Array.from(fi.files));fi.value='';};
 
-		<style type="text/css">
-			html, body {
-				font-family: arial, sans-serif;
-				margin: 0;
-				padding: 0;
-				width: 100%;
-				height: 100%;
-				overflow: hidden;
-				background-color: #000;
-				text-align: center;
-			}
+const f2b=v=>{const b=new ArrayBuffer(4);new Float32Array(b)[0]=v;return[...new Uint8Array(b)];};
+const i2b=v=>{const b=new ArrayBuffer(4);new Int32Array(b)[0]=v;return[...new Uint8Array(b)];};
+const b2f=b=>new DataView(new Uint8Array(b).buffer).getFloat32(0,true);
+const b2i=b=>new DataView(new Uint8Array(b).buffer).getInt32(0,true);
+const fh=b=>b.map(x=>x.toString(16).padStart(2,'0')).join(' ');
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fsz=b=>b<1024?b+' B':b<1048576?(b/1024|0)+' KB':(b/1048576).toFixed(1)+' MB';
 
-			/*noinspection CssInvalidPropertyValue,CssOverwrittenProperties*/
-			canvas {
-				height: 100%;
-				margin: auto;
-				padding: 0;
-				border: 0 none;
-				background-color: #000;
-				-ms-interpolation-mode: nearest-neighbor;
-				image-rendering: optimizeSpeed;
-				image-rendering: -webkit-optimize-contrast;
-				image-rendering: -moz-crisp-edges;
-				image-rendering: -o-crisp-edges;
-				image-rendering: crisp-edges;
-				image-rendering: pixelated;
-			}
+const KNOWN={
+'Player::gravity':{t:'f',d:0.125},'Player::topSpeed':{t:'f',d:6.0},
+'Player::jumpForce':{t:'f',d:-6.5},'Player::airAccel':{t:'f',d:0.046875},
+'Player::groundAccel':{t:'f',d:0.046875},'Player::decel':{t:'f',d:0.125},
+'Player::rollSpeed':{t:'f',d:4.0},'Player::underwaterGravity':{t:'f',d:0.0625},
+'Player::underwaterJumpForce':{t:'f',d:-3.875},'Player::underwaterTopSpeed':{t:'f',d:2.5}
+};
 
-			.spinner {
-				height: 30px;
-				width: 30px;
-				margin: 20px 0 0 20px;
-				display: inline-block;
-				vertical-align: top;
+// ═══ PE PARSER ═══
+function parsePE(input){
+let ab;
+if(input instanceof ArrayBuffer)ab=input;
+else if(input instanceof Uint8Array)ab=input.buffer.slice(input.byteOffset,input.byteOffset+input.byteLength);
+else ab=new Uint8Array(input).buffer;
+const u=new Uint8Array(ab),dv=new DataView(ab);
+const r32=o=>dv.getUint32(o,true),r16=o=>dv.getUint16(o,true),r8=o=>u[o];
+function str(o){let s='';while(o<u.length&&u[o])s+=String.fromCharCode(u[o++]);return s;}
+function rva2off(rva){for(const s of secs)if(rva>=s.va&&rva<s.va+s.vs)return rva-s.va+s.ro;return-1;}
+if(r16(0)!==0x5A4D)throw new Error('Not PE');
+const peO=r32(0x3C);
+if(r32(peO)!==0x4550)throw new Error('Bad PE');
+if(r16(peO+4)!==0x14C)throw new Error('Not x86');
+const numSec=r16(peO+6),optSz=r16(peO+0x14),optO=peO+0x18;
+const imgBase=r32(optO+0x1C),ddO=optO+0x78;
+const secs=[],sO=optO+optSz;
+for(let i=0;i<numSec;i++){const o=sO+i*40;secs.push({name:str(o).replace(/\0/g,''),vs:r32(o+8),va:r32(o+0xC),ro:r32(o+0x14),ch:r32(o+0x24)});}
+const imports=[];
+if(r32(ddO+8)){
+let off=rva2off(r32(ddO+8));
+while(off>0&&off<u.length-20){
+const iltR=r32(off),nmR=r32(off+0xC),iatR=r32(off+0x10);
+if(!iltR&&!nmR)break;
+const dn=str(rva2off(nmR)),fns=[];
+let fO=rva2off(iltR||iatR),iO=rva2off(iatR);
+while(fO>0&&fO<u.length-4){const e=r32(fO);if(!e)break;fns.push({name:e&0x80000000?'Ord_'+(e&0xFFFF):str(rva2off(e)+2),iatR});fO+=4;iO+=4;}
+imports.push({dll:dn,fns});off+=20;
+}}
+const exports=[];
+if(r32(ddO)){
+const off=rva2off(r32(ddO)),nN=r32(off+0x18),aO=rva2off(r32(off+0x1C)),nmO=rva2off(r32(off+0x20)),oO=rva2off(r32(off+0x24));
+for(let i=0;i<nN;i++){const nmR=r32(nmO+i*4),ord=r16(oO+i*2);exports.push({name:str(rva2off(nmR)),rva:r32(aO+ord*4)});}
+}
+const iatMap={};
+for(const imp of imports)for(const fn of imp.fns)iatMap[imgBase+fn.iatR]={name:fn.name,dll:imp.dll};
+return{imgBase,secs,imports,exports,iatMap,r8,r32,rva2off,readStrAt(va){const o=rva2off(va-imgBase);return o>=0?str(o):'';},ab};
+}
 
-				-webkit-animation: rotation .8s linear infinite;
-				-moz-animation: rotation .8s linear infinite;
-				-o-animation: rotation .8s linear infinite;
-				animation: rotation 0.8s linear infinite;
+// ═══ CODE SCANNER ═══
+function scanCode(pe){
+const writes=[],apiCalls=[],hooks=[],visited=new Set();
+const cr=[];
+for(const s of pe.secs)if(s.ch&0x20)cr.push({s:s.va,e:s.va+s.vs});
+function inC(r){for(const c of cr)if(r>=c.s&&r<c.e)return true;return false;}
+function lb(rva,max){
+const p=[];let pos=rva,lk=0;
+while(lk<max&&pos>1){pos--;const o=pe.rva2off(pos);if(o<0)break;const b=pe.r8(o);
+if(b===0x68){p.push({val:pe.r32(o+1)});lk=0;pos-=4;continue;}
+if(b===0x6A){p.push({val:pe.r8(o+1)});lk=0;pos--;continue;}
+if(b>=0x50&&b<=0x57){p.push({val:'r'+(b-0x48)});lk=0;continue;}
+lk++;}return p;
+}
+function scan(start){
+if(visited.has(start))return;visited.add(start);
+const reg=cr.find(r=>start>=r.s&&start<r.e);if(!reg)return;
+let rva=start;
+while(rva<reg.e-5){
+const o=pe.rva2off(rva);if(o<0)break;const b0=pe.r8(o);
+if(b0===0xC7){const m=pe.r8(o+1),rf=(m>>3)&7,md=(m>>6)&3,rm=m&7;
+if(rf===0){
+if(md===0&&rm===5){writes.push({rva,va:pe.imgBase+pe.r32(o+2),val:pe.r32(o+6),p:'C705'});rva+=10;continue;}
+if(md===1&&rm===5){writes.push({rva,va:'ebp',val:pe.r32(o+4),p:'C745'});rva+=7;continue;}
+if(md===1&&rm!==4){writes.push({rva,va:'r'+rm,val:pe.r32(o+3),p:'C74'});rva+=7;continue;}
+if(md===0&&rm===1){writes.push({rva,va:'ecx',val:pe.r32(o+4),p:'C741'});rva+=8;continue;}
+if(md===0&&rm===0){writes.push({rva,va:'eax',val:pe.r32(o+2),p:'C700'});rva+=6;continue;}
+if(md===2){writes.push({rva,va:'r'+rm,val:pe.r32(o+3),p:'C78'});rva+=7;continue;}
+}rva++;continue;}
+if(b0===0xA3){writes.push({rva,va:pe.imgBase+pe.r32(o+1),val:'eax',p:'A3'});rva+=5;continue;}
+if(b0===0xFF){const m=pe.r8(o+1),rf=(m>>3)&7,md=(m>>6)&3,rm=m&7;
+if(rf===2&&md===0&&rm===5){const va=pe.imgBase+pe.r32(o+2),api=pe.iatMap[va];
+if(api){apiCalls.push({rva,func:api.name,dll:api.dll,pushes:lb(rva,40)});rva+=6;continue;}}
+rva+=6;continue;}
+if(b0===0xE8){const rel=new DataView(pe.ab).getInt32(o+1,true),t=rva+5+rel;if(inC(t))scan(t);rva+=5;continue;}
+if(b0===0xC3||b0===0xC2)break;
+if(b0===0xCC||b0===0x90){rva++;continue;}
+if(b0===0xEB){rva+=2;continue;}
+if(b0>=0x74&&b0<=0x7F){rva+=2;continue;}
+if(b0===0x0F){const b1=pe.r8(o+1);if(b1>=0x84&&b1<=0x8F){rva+=6;continue;}rva+=2;continue;}
+if(b0===0x83){const m=pe.r8(o+1),md=(m>>6)&3;if(md===3)rva+=3;else if(md===1)rva+=4;else if(md===0){const rm=m&7;if(rm===5)rva+=7;else if(rm===4)rva+=4;else rva+=3;}else rva+=3;continue;}
+if(b0===0x81){rva+=6;continue;}
+if(b0===0x8B){const m=pe.r8(o+1),md=(m>>6)&3;if(md===3)rva+=2;else if(md===0&&(m&7)===5)rva+=6;else if(md===0&&(m&7)===4)rva+=3;else if(md===1)rva+=3;else rva+=2;continue;}
+if(b0>=0xB8&&b0<=0xBF){rva+=5;continue;}
+if(b0>=0x50&&b0<=0x5F){rva++;continue;}
+if(b0===0x68){rva+=5;continue;}
+if(b0===0x6A){rva+=2;continue;}
+if(b0===0x89){const m=pe.r8(o+1),md=(m>>6)&3;if(md===3)rva+=2;else if(md===0&&(m&7)===5)rva+=6;else if(md===0&&(m&7)===4)rva+=3;else if(md===1)rva+=3;else rva+=2;continue;}
+if(b0===0x85||b0===0x3B||b0===0x39||b0===0x01||b0===0x29||b0===0x31||b0===0x09||b0===0x21||b0===0x2B||b0===0x38||b0===0x00||b0===0x02||b0===0x8A||b0===0x88){const m=pe.r8(o+1),md=(m>>6)&3;rva+=md===3?2:2;continue;}
+if(b0===0x8D){const m=pe.r8(o+1),md=(m>>6)&3,rm=m&7;if(md===3)rva+=2;else if(md===0&&rm===5)rva+=6;else if(md===1)rva+=3;else if(md===0&&rm===4)rva+=3;else rva+=3;continue;}
+if(b0===0xE9){rva+=5;continue;}
+if(b0===0xC6){const m=pe.r8(o+1),md=(m>>6)&3;rva+=md===3?3:4;continue;}
+if(b0===0xF6||b0===0xF7){rva+=3;continue;}
+if(b0===0xFE||b0===0xFF){const m=pe.r8(o+1),md=(m>>6)&3;rva+=md===3?2:((m&7)===5)?6:2;continue;}
+if(b0===0x0F){const b1=pe.r8(o+1);if(b1===0xBE||b1===0xBF)rva+=3;else rva+=2;continue;}
+if(b0===0x3A){rva+=2;continue;}
+if(b0===0x04||b0===0x0C){rva+=2;continue;}
+if(b0===0xA1||b0===0xA8){rva+=b0===0xA1?5:2;continue;}
+if(b0>=0xB0&&b0<=0xB7){rva+=2;continue;}
+rva++;
+}}
+for(const e of pe.exports)if(/init|main|start|entry|modinit/i.test(e.name))scan(e.rva);
+return{writes,apiCalls,hooks,visited:visited.size};
+}
 
-				border-left: 5px solid rgb(235, 235, 235);
-				border-right: 5px solid rgb(235, 235, 235);
-				border-bottom: 5px solid rgb(235, 235, 235);
-				border-top: 5px solid rgb(120, 120, 120);
+// ═══ CROSS-REF ═══
+function crossRef(pe,scan){
+const patches=[],used=new Set();
+const calls=scan.apiCalls.slice().sort((a,b)=>a.rva-b.rva);
+const writes=scan.writes.slice().sort((a,b)=>a.rva-b.rva);
+for(const call of calls){
+if(/GetGlobal/i.test(call.func)&&/Variable/i.test(call.func)){
+let sym='';const ps=call.pushes;
+if(ps.length&&typeof ps[ps.length-1].val==='number'){sym=pe.readStrAt(ps[ps.length-1].val);}
+if(!sym)sym='unknown_0x'+call.rva.toString(16);
+for(const w of writes){
+if(w.rva>call.rva&&w.rva-call.rva<80&&typeof w.val==='number'&&!used.has(w.rva)){
+used.add(w.rva);const kn=KNOWN[sym];patches.push({symbol:sym,value:w.val,type:kn?kn.t==='f'?'f':'i':'?',original:kn?kn.d:null,source:call.func,confident:!!sym&&!sym.startsWith('unknown')});break;
+}}}
+if(/SetGlobal/i.test(call.func)&&/Variable/i.test(call.func)){
+const ps=call.pushes;
+if(ps.length>=2){let sym='';if(typeof ps[ps.length-2].val==='number')sym=pe.readStrAt(ps[ps.length-2].val);
+if(sym&&typeof ps[ps.length-1].val==='number'){const kn=KNOWN[sym];patches.push({symbol:sym,value:ps[ps.length-1].val,type:kn?kn.t==='f'?'f':'i':'?',original:kn?kn.d:null,source:call.func,confident:true});}}}
+if(/HookInstall/i.test(call.func)&&call.pushes.length>=2){
+scan.hooks.push({rva:call.rva,id:call.pushes[call.pushes.length-2].val,func:call.pushes[call.pushes.length-1].val});}
+}
+return{patches,unmatched:writes.filter(w=>!used.has(w.rva)&&typeof w.val==='number'&&w.p.startsWith('C7'))};
+}
 
-				border-radius: 100%;
-				background-color: rgb(189, 215, 46);
-			}
+// ═══ ANALYZE ONE DLL ═══
+function analyzeDLL(name,data){
+const pe=parsePE(data);const sc=scanCode(pe);const xr=crossRef(pe,sc);
+return{name,size:data.byteLength,pe,scan:sc,xref:xr,error:null};
+}
 
-			@-webkit-keyframes rotation {
-				from {
-					-webkit-transform: rotate(0deg);
-				}
-				to {
-					-webkit-transform: rotate(360deg);
-				}
-			}
+// ═══ GENERATE OUTPUT ═══
+function genPatchScript(patches){
+const usable=patches.filter(p=>p.original!==null);
+if(!usable.length)return'// No patches with known original values\n';
+let s='(function(){\n"use strict";\nwindow._modPatches=[\n';
+for(const p of usable){
+const sb=p.type==='f'?f2b(p.original):i2b(p.original);
+const rb=p.type==='f'?f2b(b2f(i2b(p.value))):i2b(p.value);
+s+='  {sym:"'+p.symbol+'",search:['+sb.join(',')+'],replace:['+rb.join(',')+'],type:"'+(p.type==='f'?'float':'int32')+'"},\n';
+}
+s+='];\nwindow.applyAutoPatches=function(mem){\n';
+s+='  var u8=new Uint8Array(mem.buffer),ap=0;\n';
+s+='  for(var i=0;i<window._modPatches.length;i++){\n';
+s+='    var p=window._modPatches[i];\n';
+s+='    for(var off=0;off<=u8.length-p.search.length;off+=4){\n';
+s+='      var m=true;for(var j=0;j<p.search.length;j++){if(u8[off+j]!==p.search[j]){m=false;break;}}\n';
+s+='      if(m){for(var j=0;j<p.replace.length;j++)u8[off+j]=p.replace[j];console.log("[mod] "+p.sym+" @0x"+off.toString(16));ap++;break;}\n';
+s+='    }\n';
+s+='  }\n  console.log("[mod] Applied "+ap+"/"+window._modPatches.length+" patches");return ap;\n';
+s+='};\n})();\n';
+return s;
+}
 
-			@-moz-keyframes rotation {
-				from {
-					-moz-transform: rotate(0deg);
-				}
-				to {
-					-moz-transform: rotate(360deg);
-				}
-			}
+function genLoader(hasData){
+const dataFetch=hasData?`
+  fetch('./mod-data.bin').then(function(r){return r.arrayBuffer();}).then(function(buf){
+    window._modDataBuf=buf;go();
+  }).catch(function(e){
+    ld.textContent='Failed to load mod-data.bin: '+e.message;
+  });`:'go();';
 
-			@-o-keyframes rotation {
-				from {
-					-o-transform: rotate(0deg);
-				}
-				to {
-					-o-transform: rotate(360deg);
-				}
-			}
+return`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<style>*{margin:0;padding:0}html,body{height:100%;overflow:hidden;background:#000}
+#c{position:fixed;inset:0;width:100%;height:100%;display:none;image-rendering:pixelated}
+#ld{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#444;font:13px sans-serif}</style>
+</head><body>
+<canvas id="c"></canvas>
+<div id="ld">Loading...</div>
+<script>
+ ${genPatchScript(pkgData.allPatches)}
+(function(){
+var _asm=null,_fsc=null,ld=document.getElementById('ld');
+function go(){
+  if(ld)ld.textContent='Starting...';
+  Object.defineProperty(window.Module,'asm',{configurable:true,enumerable:true,
+    get:function(){return _asm;},
+    set:function(v){_asm=v;
+      if(window.applyAutoPatches&&v&&v.memory){
+        var n=window.applyAutoPatches(v.memory);
+        if(n)console.log("[loader] "+n+" patches applied");
+      }
+    }
+  });
+  window.Module={
+    getPreloadedPackage:function(name){
+      if(name==='index.data'&&window._modDataBuf)return window._modDataBuf;
+      return null;
+    },
+    get FS_createDataFile(){
+      if(!_fsc)return undefined;
+      if(!this._fsw){this._fsw=function(){
+        var a=arguments,p='';
+        if(a.length>=6)p=(a[0]||'')+(a[1]?'/'+a[1]:'');
+        else if(a.length>=5)p=a[0]||'';
+        else p=String(a[0]||'?');
+        console.log("[mod] FS_createDataFile("+p+")");
+        return _fsc.apply(null,a);
+      };}return this._fsw;
+    },
+    set FS_createDataFile(fn){if(fn)_fsc=fn;},
+    canvas:document.getElementById('c'),
+    print:function(t){console.log(t);},
+    printErr:function(t){console.warn(t);},
+    setStatus:function(t){if(ld&&t&&t!=='Running...')ld.textContent=t;},
+    noExitRuntime:true
+  };
+  document.getElementById('c').style.display='block';
+  if(ld)ld.style.display='none';
+  var sc=document.createElement('script');
+  sc.src='./index.js';
+  sc.onerror=function(){if(ld){ld.style.display='';ld.textContent='Failed to load index.js — serve from http';}};
+  document.head.appendChild(sc);
+}
+ ${dataFetch}
+})();
+<\/script></body></html>`;
+}
 
-			@keyframes rotation {
-				from {
-					transform: rotate(0deg);
-				}
-				to {
-					transform: rotate(360deg);
-				}
-			}
+// ═══ MAIN HANDLER ═══
+async function handle(files){
+out.innerHTML='<div class="err">Scanning...</div>';dz.classList.add('has');
+const dlls=[],dataFiles=[];
 
-			#status {
-				display: inline-block;
-				vertical-align: top;
-				margin-top: 30px;
-				margin-left: 20px;
-				font-weight: bold;
-				color: rgb(120, 120, 120);
-			}
+for(const file of files){
+const name=file.name.toLowerCase();
+if(name.endsWith('.zip')){
+try{const raw=new Uint8Array(await file.arrayBuffer());
+const map=fflate.unzipSync(raw);
+for(const path in map){
+const p=path.replace(/\\/g,'/'),fn=p.split('/').pop();
+if(/\.dll$/i.test(fn))dlls.push({name:p,data:map[p]});
+if(/Data\.rsdk$/i.test(fn))dataFiles.push({name:p,data:map[p]});
+}}catch(e){out.innerHTML+='<div class="err">ZIP error: '+esc(e.message)+'</div>';return;}
+}else if(name.endsWith('.dll')){
+dlls.push({name:file.name,data:new Uint8Array(await file.arrayBuffer())});
+}else if(/\.rsdk$/i.test(name)||/\.data$/i.test(name)){
+dataFiles.push({name:file.name,data:new Uint8Array(await file.arrayBuffer())});
+}
+}
 
-			#progress {
-				height: 20px;
-				width: 300px;
-			}
+if(!dlls.length&&!dataFiles.length){out.innerHTML='<div class="err">No DLLs or Data.rsdk found</div>';return;}
 
-			#output {
-				width: 100%;
-				height: 200px;
-				margin: 10px auto 0;
-				border-left: 0;
-				border-right: 0;
-				padding-left: 0;
-				padding-right: 0;
-				display: block;
-				background-color: black;
-				color: white;
-				font-family: 'Lucida Console', Monaco, monospace;
-				outline: none;
-			}
+dz.textContent=dlls.length+' DLL(s), '+dataFiles.length+' data file(s)';
 
-			#logo {
-				align-self: center;
-				height: 75%;
-				width: 75%;
-			}
-		</style>
-	</head>
-	<body>
-		<div class="spinner" id="spinner" style="display: none;"></div>
-		<div id="status" style="display: none;">Downloading...</div>
-		<progress id="progress" value="0" max="100" hidden="hidden"></progress>
-		<canvas id="canvas" onclick="window.focus();" oncontextmenu="event.preventDefault();"></canvas>
-		<textarea id="output" style="display: none;" rows="8"></textarea>
+const results=[];
+for(const d of dlls){
+try{results.push(analyzeDLL(d.name,d.data));}
+catch(e){results.push({name:d.name,size:d.data.byteLength,error:e.message,xref:{patches:[],unmatched:[]},scan:{hooks:[],visited:0}});}
+}
 
-		<script type="text/javascript">
+const allPatches=results.flatMap(r=>r.xref.patches);
+const allHooks=results.flatMap(r=>r.scan.hooks);
+const totalUnmatched=results.reduce((s,r)=>s+r.xref.unmatched.length,0);
+const modData=dataFiles.length?dataFiles[0].data:null;
 
-			var statusElement = document.getElementById('status');
-			var progressElement = document.getElementById('progress');
-			var spinnerElement = document.getElementById('spinner');
+pkgData={results,allPatches,allHooks,modData,modName:dataFiles.length?dataFiles[0].name.replace(/\\/g,'/').split('/').pop():''};
 
-			var Module = {
-				preRun: [],
-				postRun: [],
-				print: (function () {
-					var element = document.getElementById('output');
-					if (element) element.value = ''; // clear browser cache
-					return function (text) {
-						if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
-						// These replacements are necessary if you render to raw HTML
-						//text = text.replace(/&/g, "&amp;");
-						//text = text.replace(/</g, "&lt;");
-						//text = text.replace(/>/g, "&gt;");
-						//text = text.replace('\n', '<br>', 'g');
-						console.log(text);
-						if (element) {
-							element.value += text + "\n";
-							element.scrollTop = element.scrollHeight; // focus on bottom
-						}
-					};
-				})(),
-				printErr: function (text) {
-					if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
-					console.error(text);
-				},
-				canvas: (function () {
-					var canvas = document.getElementById('canvas');
+// Render
+let h='<div class="total">';
+if(modData)h+='<span class="g">Data.rsdk: '+fsz(modData.byteLength)+'</span>';
+h+='<span class="a">'+allPatches.length+' patches</span>';
+if(allHooks.length)h+='<span class="a">'+allHooks.length+' hooks</span>';
+if(totalUnmatched)h+='<span class="d">'+totalUnmatched+' unmatched</span>';
+h+='</div>';
 
-					// As a default initial behavior, pop up an alert when webgl context is lost. To make your
-					// application robust, you may want to override this behavior before shipping!
-					// See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
-					canvas.addEventListener("webglcontextlost", function (e) {
-						alert('WebGL context lost. You will need to reload the page.');
-						e.preventDefault();
-					}, false);
+if(dataFiles.length>1){h+='<div class="row"><span class="k">Note</span><span class="v a">Multiple data files — using first: '+esc(dataFiles[0].name)+'</span></div>';}
 
-					return canvas;
-				})(),
-				setStatus: function (text) {
-					if (!Module.setStatus.last) Module.setStatus.last = {time: Date.now(), text: ''};
-					if (text === Module.setStatus.last.text) return;
-					var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
-					var now = Date.now();
-					if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
-					Module.setStatus.last.time = now;
-					Module.setStatus.last.text = text;
-					if (m) {
-						text = m[1];
-						progressElement.value = parseInt(m[2]) * 100;
-						progressElement.max = parseInt(m[4]) * 100;
-						progressElement.hidden = false;
-						spinnerElement.hidden = false;
-					} else {
-						progressElement.value = null;
-						progressElement.max = null;
-						progressElement.hidden = true;
-						if (!text) spinnerElement.style.display = 'none';
-					}
-					statusElement.innerHTML = text;
-				},
-				totalDependencies: 0,
-				monitorRunDependencies: function (left) {
-					this.totalDependencies = Math.max(this.totalDependencies, left);
-					Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
-				}
-			};
-			Module.setStatus('Downloading...');
-			window.onerror = function () {
-				Module.setStatus('Exception thrown, see JavaScript console');
-				spinnerElement.style.display = 'none';
-				Module.setStatus = function (text) {
-					if (text) Module.printErr('[post-exception status] ' + text);
-				};
-			};
-		</script>
-		<script src="mweb.js"></script>
-		<script async="async" defer="defer" type="text/javascript" src="index.js"></script>
-	</body>
+results.forEach((r,i)=>{
+const pn=r.xref.patches.length,hn=r.scan.hooks.length,un=r.xref.unmatched.length;
+const sn=r.name.split('/').pop();
+h+='<div class="dl" data-i="'+i+'"><div class="dn">'+esc(sn)+(pn?'<span class="tag data">'+pn+'P</span>':'')+(hn?'<span class="tag hook">'+hn+'H</span>':'')+(un?'<span class="tag guess">'+un+'U</span>':'')+'</div>';
+if(r.error)h+='<div class="ds err">'+esc(r.error)+'</div>';
+else h+='<div class="ds">'+fsz(r.size)+' — '+r.scan.visited+' functions</div>';
+h+='</div>';
+h+='<div class="dd" id="dd'+i+'">';
+if(!r.error){
+for(const e of r.pe.exports)h+='<div class="row"><span class="k">'+esc(e.name)+'</span><span class="v">0x'+e.rva.toString(16)+'</span></div>';
+const aps=[...new Set(r.pe.imports.map(x=>x.dll))];
+for(const dll of aps){h+='<div class="sec">'+esc(dll)+'</div>';
+for(const fn of r.pe.imports.filter(x=>x.dll===dll)){
+if(/Global|Hook|Register|Mod/i.test(fn.name))h+='<div class="row"><span class="k">'+esc(fn.name)+'</span><span class="v a"><span class="tag hook">api</span></span></div>';
+else h+='<div class="row"><span class="k">'+esc(fn.name)+'</span></div>';
+}}
+if(r.xref.patches.length){h+='<div class="sec">Patches</div>';
+for(const p of r.xref.patches){
+const vb=i2b(p.value),isF=p.type==='f',dv=isF?b2f(vb):b2i(vb);
+const os=p.original!==null?(isF?p.original:JSON.stringify(p.original)):'?';
+const ob=p.original!==null?fh(isF?f2b(p.original):i2b(p.original)):'? ? ? ?';
+h+='<div class="pat"><span class="sym">'+esc(p.symbol)+'</span><span class="b">'+ob+'</span><span class="ar">&rarr;</span><span class="rep">'+fh(vb)+'</span><span class="m">'+(isF?'f32':'i32')+' '+os+' &rarr; '+dv+'</span>'+(p.confident?'<span class="tag data">auto</span>':'<span class="tag guess">guess</span>')+'</div>';
+}}
+if(r.scan.hooks.length){h+='<div class="sec">Hooks</div>';
+for(const hk of r.scan.hooks)h+='<div class="pat"><span class="sym">HookInstall</span><span class="b">0x'+hk.id.toString(16)+'</span><span class="ar">&rarr;</span><span class="rep">0x'+hk.func.toString(16)+'</span><span class="tag hook">hook</span></div>';}
+if(r.xref.unmatched.length){h+='<div class="sec">Unmatched ('+r.xref.unmatched.length+')</div>';
+for(const w of r.xref.unmatched.slice(0,20)){
+const vb=i2b(w.value);h+='<div class="pat"><span class="sym" style="color:#555">0x'+(typeof w.va==='number'?w.va.toString(16):'?')+'</span><span class="b">i:'+b2i(vb)+' f:'+b2f(vb).toFixed(4)+'</span><span class="rep">'+fh(vb)+'</span></div>';}
+if(r.xref.unmatched.length>20)h+='<div style="font-size:9px;color:#333">+'+(r.xref.unmatched.length-20)+' more</div>';}
+}
+h+='</div>';
+});
+
+const usablePatches=allPatches.filter(p=>p.original!==null);
+if(usablePatches.length){
+h+='<div class="sec">Output</div>';
+h+='<div class="row"><span class="k">Patched values</span><span class="v g">'+usablePatches.length+' (with known originals)</span></div>';
+h+='<div class="row"><span class="k">Guess patches</span><span class="v a">'+(allPatches.length-usablePatches.length)+' (unknown originals, skipped)</span></div>';
+h+='<div class="row"><span class="k">Data swap</span><span class="v">'+(modData?'yes — '+fsz(modData.byteLength):'no')+'</span></div>';
+}
+
+out.innerHTML=h;
+out.querySelectorAll('.dl').forEach(el=>{el.onclick=()=>{const dd=document.getElementById('dd'+el.dataset.i);if(dd){dd.classList.toggle('show');el.classList.toggle('open');}};});
+
+const canDl=modData||usablePatches.length;
+document.getElementById('dlBtn').disabled=!canDl;
+document.getElementById('btns').style.display=canDl?'flex':'none';
+if(!canDl&&!modData)out.innerHTML+='<div class="err" style="margin-top:8px">Nothing to package — no Data.rsdk and no patches with known original values.</div>';
+}
+
+// ═══ DOWNLOAD ═══
+document.getElementById('dlBtn').onclick=()=>{
+if(!pkgData)return;
+const usablePatches=pkgData.allPatches.filter(p=>p.original!==null);
+const hasData=!!pkgData.modData;
+const loaderHTML=genLoader(hasData);
+const map={};
+map['loader.html']=new TextEncoder().encode(loaderHTML);
+if(hasData)map['mod-data.bin']=pkgData.modData;
+
+const zip=fflate.zipSync(map,{level:1});
+const blob=new Blob([zip],{type:'application/octet-stream'});
+const a=document.createElement('a');
+a.href=URL.createObjectURL(blob);
+a.download=(pkgData.modName||'mod')+'-patched.zip';
+a.click();
+URL.revokeObjectURL(a.href);
+toast('Downloaded '+fsz(zip.byteLength)+' package');
+};
+
+function toast(msg){
+const el=document.createElement('div');
+el.style.cssText='position:fixed;top:12px;right:12px;z-index:999;padding:8px 14px;background:#0c0b0a;border:1px solid #3da34d;font-size:11px;color:#3da34d;font-family:inherit;';
+el.textContent=msg;document.body.appendChild(el);
+setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(()=>el.remove(),300);},2500);
+}
+</script>
+</body>
 </html>

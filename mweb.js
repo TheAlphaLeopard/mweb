@@ -3,9 +3,7 @@
 if(location.search.includes('nomods=1'))return;
 
 if('serviceWorker' in navigator){
-  navigator.serviceWorker.getRegistrations().then(function(r){
-    for(var i=0;i<r.length;i++)r[i].unregister();
-  });
+  navigator.serviceWorker.getRegistrations().then(function(r){for(var i=0;i<r.length;i++)r[i].unregister();});
 }
 
 var mods=[];
@@ -29,7 +27,7 @@ parse:function(b){
     var sz=d.getUint32(p,true),o=d.getUint32(p+4,true),
         en=d.getUint32(p+8,true),md=r.slice(p+12,p+28);p+=28;
     var name=this._d(rn,e);
-    f.push({name:name,offset:o,size:sz,enc:en,md5:md});
+    f.push({name:name,path:'/'+name,offset:o,size:sz,enc:en});
   }
   return{files:f,raw:r};
 },
@@ -39,79 +37,62 @@ _d:function(r,e){
   return String.fromCharCode.apply(null,o);
 }};
 
-console.log('%c[mml]%c Waiting for Emscripten FS...','color:#60a5fa;font-weight:bold','color:inherit');
+console.log('%c[mml]%c Initializing...','color:#60a5fa;font-weight:bold;font-size:14px','color:inherit');
 
 var pollId = setInterval(function() {
-  if (typeof FS !== 'undefined' && typeof FS.createDataFile === 'function') {
-    clearInterval(pollId);
-    console.log('%c[mml]%c FS found! Installing patch...','color:#4ade80;font-weight:bold','color:inherit');
-    
-    var origCreate = FS.createDataFile;
-    FS.createDataPass = origCreate; // Backup original just in case
-    
-    FS.createDataFile = function(path, data, canRead, canWrite, canDelete, canOwn) {
-      // MUST pass arguments explicitly. Emscripten's path.resolve() 
-      // will crash if we pass the 'arguments' object directly.
-      var res = origCreate(path, data, canRead, canWrite, canDelete, canOwn);
+  try {
+    if (typeof Module !== 'undefined' && typeof Module['removeRunDependency'] === 'function') {
+      clearInterval(pollId);
+      console.log('%c[mml]%c Found Module.removeRunDependency! Installing patch...','color:#4ade80;font-weight:bold','color:inherit');
       
-      if ((path==='/Data.rsdk'||path==='Data.rsdk') && data instanceof Uint8Array && mods.length > 0) {
-        try {
-          console.log('%c[mml]%c >>> /Data.rsdk INTERCEPTED <<<','color:#f472b6;font-weight:bold;font-size:14px','color:inherit');
+      var origRemove = Module['removeRunDependency'];
+      Module['removeRunDependency'] = function(id) {
+        if (id === 'index.data') {
+          console.log('%c[mml]%c >>> index.data resolved! Patching NOW! <<<','color:#f472b6;font-weight:bold;font-size:14px','color:inherit');
           
-          var node = FS.analyzePath('/Data.rsdk').node;
-          if (!node) { console.error('[mml] ERROR: MEMFS node not found!'); return res; }
+          var byteArray = DataRequest.prototype.byteArray;
           
-          var oldContents = node.contents;
-          console.log('[mml] Node size: '+formatBytes(oldContents.byteLength));
-
-          // SAFETY: Copy to prevent XHR GC from detaching buffer
-          console.log('[mml] Detaching from XHR...');
-          var contents = new Uint8Array(oldContents.byteLength);
-          contents.set(oldContents);
-          node.contents = contents;
-
-          // Parse base to get file offsets
-          console.log('[mml] Parsing offsets...');
-          var base = R.parse(contents);
-
-          // Patch!
+          if (!byteArray) {
+            console.error('[mml] ERROR: DataRequest.prototype.byteArray not set yet!');
+            return origRemove.call(this, id);
+          }
+          
+          var base = R.parse(byteArray);
+          
+          var totalPatches = 0, corrupted = [];
           mods.forEach(function(mod) {
-            console.log('[mml] Patching: '+mod._l);
-            var overrides=0;
-            
+            var overrides = 0;
             mod.files.forEach(function(f) {
               var key = f.name.toLowerCase();
-              for(var i=0;i<base.files.length;i++){
-                if(base.files[i].name.toLowerCase() === key){
-                  var baseOffset = base.files[i].offset;
+              for (var i = 0; i < base.files.length; i++) {
+                if (base.files[i].name.toLowerCase() === key) {
+                  var offset = base.files[i].offset;
                   var modData = mod.raw.subarray(f.offset, f.offset + f.size);
-                  contents.set(modData, baseOffset);
-                  overrides++;
+                  if (offset + modData.length > byteArray.byteLength) {
+                    console.warn('[mml] WARNING: Mod file larger than base! Will corrupt next file: '+f.name);
+                    corrupted.push(f.name);
+                  } else {
+                    byteArray.set(modData, offset);
+                    overrides++;
+                  }
                   break;
                 }
               }
             });
-            
-            console.log('[mml] Applied '+overrides+' overrides.');
           });
           
           mods = null;
-          console.log('%c[mml]%c SUCCESS! Megamix is now active in memory.','color:#4ade80;font-weight:bold;font-size:14px','color:inherit');
+          console.log('%c[mml]%c PATCHING COMPLETE!','color:#4ade80;font-weight:bold;font-size:14px','color:inherit');
           
-        } catch(e) {
-          console.error('%c[mml]%c FATAL:','color:#f87171;font-weight:bold','color:inherit',e);
         }
-      }
-      
-      return res;
-    };
-    
-    // Restore normal behavior for all other files
-    FS.createDataFile = origCreate;
-  }
+        
+        return origRemove.call(this, id);
+      };
+    }
+  } catch(e) {}
 }, 10);
 
-// ── UI ───────────────────────────────────────────────────────
+// ── UI ───────────────────────────────────────────────────────────
 var el=document.createElement('div');el.id='ml';
 el.innerHTML=
 '<style>'+
@@ -143,7 +124,6 @@ fi.onchange=function(){if(fi.files.length)(async function(){for(var i=0;i<fi.fil
 ls.onclick=function(e){if(e.target.classList.contains('x')){mods.splice(+e.target.dataset.i,1);ren();}};
 dz.ondragover=function(e){e.preventDefault();dz.classList.add('ov');};
 dz.ondragleave=function(){dz.classList.remove('ov');};
-el.ondragover=function(e){e.preventDefault();};
 el.ondrop=async function(e){
   e.preventDefault();dz.classList.remove('ov');
   var it=e.dataTransfer.items;if(!it)return;
@@ -156,7 +136,7 @@ el.ondrop=async function(e){
 };
 
 async function af(f){
-  if(!f.name.toLowerCase().endsWith('.rsdk'))return;
+  if(!f.name.toLowerCase().endswith('.rsdk'))return;
   try{
     var b=await f.arrayBuffer(),r=R.parse(new Uint8Array(b));
     r._l=f.name.replace(/\.rsdk$/i,'');

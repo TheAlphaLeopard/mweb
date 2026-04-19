@@ -2,166 +2,360 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RSDK Builder</title>
+  <title>RSDK Tool</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
-    body{height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0a0a;color:#333;font:13px/1.4 monospace}
-    #b{width:340px;text-align:center}
-    #dz{border:2px dashed #181818;padding:40px 20px;cursor:pointer;border-radius:4px;transition:all .2s}
+    body{font-family:monospace;background:#0a0a0a;color:#ccc;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+    .tabs{display:flex;gap:4px}
+    .tab{padding:6px 16px;border:1px solid #161616;border-radius:4px 4px 0 0;background:#070707;color:#222;cursor:pointer;font-size:12px}
+    .tab:hover{background:#111;color:#4ade80}
+    .tab.active{background:#0f2a0f;color:#4ade80;border-bottom-color:#4ade80}
+    .panel{background:#0a0a0a;border:1px solid #161616;border-radius:0 0 4px 4px;padding:16px;width:400px;max-width:90vw;max-height:60vh;display:flex;flex-direction:column;gap:10px}
+    .hidden{display:none!important}
+    #dz{border:2px dashed #181818;padding:40px 20px;cursor:pointer;border-radius:4px;transition:all .2s;text-align:center}
     #dz:hover,#dz.ov{border-color:#4ade80;color:#4ade80}
-    #st{margin-top:12px;font-size:11px;color:#4ade80;display:none;white-space:pre-wrap}
-    input{display:none}
+    #log,#log2{flex:1;width:100%;background:rgba(255,255,255,.03);border-radius:4px;padding:10px;font-size:11px;color:#555;overflow-y:auto;white-space:pre-wrap;word-break:break-all;max-height:50vh}
+    input[type="file"]{display:none}
+    button{padding:8px 16px;background:#070707;border:1px solid #161616;border-radius:4px;color:#222;cursor:pointer;font:inherit;font-size:12px;letter-spacing:.03em}
+    button:hover{background:#111;border-color:#4ade80;color:#4ade80}
+    .log-ok{color:#4ade80} .log-err{color:#f87171}
   </style>
 </head>
 <body>
-  <div id="b">
-    <div id="dz">Drop mod folder here</div>
-    <div id="st"></div>
+  <div class="tabs">
+    <div class="tab active" data-tab="build">Build .RSDK</div>
+    <div class="tab" data-tab="extract">Extract .RSDK</div>
+  </div>
+  <div class="panel" id="p-build">
+    <div id="dz">Drop mod folder here<br><small>(must contain Data/ folder)</small></div>
+    <div id="log"></div>
+    <button id="btnBuild">Build and Download .rsdk</button>
+  </div>
+  <div class="panel hidden" id="p-extract">
+    <div id="dz2">Drop .rsdk or index.data here</div>
+    <div id="log2"></div>
+    <button id="btnExtract">Extract and Download .zip</button>
   </div>
   <input type="file" id="fi" webkitdirectory>
-<script>
-var fi=document.getElementById('fi'),dz=document.getElementById('dz'),st=document.getElementById('st');
-var MG=[0x52,0x53,0x44,0x4B,0x76,0x35];
+  <input type="file" id="ri" accept=".rsdk,.data">
+<script type="module">
+import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
 
+// ── Utility ──────────────────────────────────────────────────────
 function formatBytes(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB';}
 
-function build(entries){
-  var n=entries.length;if(!n)return new Uint8Array(0);
-  var hs=16,i;for(i=0;i<n;i++){hs+=entries[i].path.length+1;hs=(hs+3)&~3;hs+=28;}
-  var doff=hs,inf=[];
-  for(i=0;i<n;i++){
-    var dl=entries[i].data.byteLength;
-    inf.push({path:entries[i].path,offset:doff,size:dl,enc:0,md5:new Uint8Array(16)});
-    doff+=dl;
-  }
-  var out=new Uint8Array(doff),dv=new DataView(out.buffer);
-  out.set(MG,0);dv.setUint32(8,n,true);dv.setUint32(12,0,true);
-  var p=16;
-  for(i=0;i<n;i++){
-    var nm=entries[i].path;
-    for(var j=0;j<nm.length;j++)out[p++]=nm.charCodeAt(j)^(((i+1)*7+j)&0xFF);
-    out[p++]=0;p=(p+3)&~3;
-    dv.setUint32(p,inf[i].size,true);p+=4;dv.setUint32(p,inf[i].offset,true);p+=4;
-    dv.setUint32(p,0,true);p+=4;p+=16;
-  }
-  for(i=0;i<n;i++)out.set(entries[i].data,inf[i].offset);
-  return out;
+function log(id, msg, type) {
+  var el = document.getElementById(id);
+  if(!el)return;
+  el.style.display='block';
+  el.classList.remove('log-ok','log-err');
+  if(type) el.classList.add('log-'+type);
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
 }
 
-function strip(files){
-  if(!files.length)return[];
-  // Find longest common parent directory
-  var p=files[0].path,i;
-  for(i=1;i<files.length;i++){while(p&&!files[i].path.startsWith(p))p=p.slice(0,-1);}
-  var s=p.lastIndexOf('/');p=s!==-1?p.substring(0,s+1):'';
-  
-  var out=[];
-  for(i=0;i<files.length;i++){
-    var r=files[i].path.substring(p.length);
-    if(r&&!r.endsWith('/'))out.push({path:r,data:files[i].data});
-  }
-  
-  // CRITICAL FIX: If paths start with /Data/, strip it. 
-  // The engine expects /Game/Game.bin, NOT /Data/Game/Game.bin
-  if(out.length && out[0].path.toLowerCase().startsWith('/data/')) {
-    out.forEach(function(f){ f.path = f.path.substring(5); });
-  }
-  return out;
-}
-
-async function process(fileEntries, label){
-  st.style.display='block'; 
-  var files=[];
-  var skipped=0, errors=0;
-  
-  st.textContent='Reading files... 0/' + fileEntries.length;
-  
-  // Read files ONE BY ONE with try/catch to prevent OOM crashes
-  for(var i=0;i<fileEntries.length;i++){
-    var entry = fileEntries[i];
-    // Use the path generated by our walk() function!
-    var p = entry.path;
-    try {
-      var data = new Uint8Array(await entry.file.arrayBuffer());
-      if(data.length === 0) {
-        console.warn('Skipped empty file:', p);
-        skipped++;
-        continue;
-      }
-      files.push({path:p, data:data});
-    } catch(e) {
-      console.error('Failed to read file:', p, e.message);
-      errors++;
+// ── Robust Directory Walker ────────────────────────────────────────
+async function walk(en, path, out) {
+  if (en.isFile) {
+    const file = await new Promise(resolve => en.file(resolve));
+    out.push({ name: file.name, path: path + file.name, data: new Uint8Array(await file.arrayBuffer()) });
+  } else if (en.isDirectory) {
+    const reader = en.createReader();
+    let entries = [];
+    let done = false;
+    while (!done) {
+      entries = await new Promise(resolve => {
+        reader.readEntries(result => {
+          if (result.length === 0) { done = true; resolve([]); }
+          else { entries.push(...result); resolve(entries); }
+        });
+      });
     }
-    if(i % 100 === 0) st.textContent='Reading files... '+i+'/'+fileEntries.length;
-  }
-  
-  if(errors > 0 || skipped > 0) {
-    alert('Done reading.\nErrors: '+errors+'\nSkipped empty: '+skipped+'\n\nThe RSDK might be incomplete.');
-  }
-  
-  if(!files.length) {
-    alert('No valid files found inside the folder.');
-    st.style.display='none';
-    return;
-  }
-
-  st.textContent='Parsing paths ('+files.length+' files)...';
-  await new Promise(r=>setTimeout(r,10));
-  
-  var ent = strip(files);
-  var totalSize = ent.reduce(function(s,f){ return s + f.data.byteLength; }, 0);
-  
-  st.textContent='Building RSDK...\n'+ent.length+' files, '+formatBytes(totalSize)+' total.';
-  await new Promise(r=>setTimeout(r,10));
-  
-  var rsdk=build(ent);
-  st.textContent='Success! Downloading '+formatBytes(rsdk.byteLength)+'...';
-  
-  var a=document.createElement('a');
-  a.href=URL.createObjectURL(new Blob([rsdk],{type:'application/octet-stream'}));
-  a.download=(label||'mod')+'.rsdk';
-  a.click();
-  URL.revokeObjectURL(a.href);
-  
-  setTimeout(()=>{st.style.display='none';}, 3000);
-}
-
-dz.onclick=()=>fi.click();
-fi.onchange=e=>{
-  if(!fi.files.length)return;
-  var files = Array.from(fi.files).map(f => ({file:f, path:f.webkitRelativePath}));
-  process(files, fi.files[0].webkitRelativePath.split('/')[0]);
-  fi.value='';
-};
-dz.ondragover=e=>e.preventDefault();
-dz.ondragleave=()=>dz.classList.remove('ov');
-dz.ondrop=async e=>{
-  e.preventDefault();dz.classList.remove('ov');
-  var items=e.dataTransfer.items;if(!items)return;
-  var all=[];
-  for(var i=0;i<items.length;i++){
-    var en=items[i].webkitGetAsEntry&&items[i].webkitGetAsEntry();
-    if(!en)continue;
-    await walk(en,'',all);
-  }
-  if(all.length)process(all, all[0].path.split('/')[0]);
-};
-
-async function walk(en,path,out){
-  if(en.isFile){
-    out.push({file:await new Promise(r=>en.file(r)), path:path+en.name});
-  }
-  else if(en.isDirectory){
-    var rd=en.createReader();
-    await new Promise(r=>{
-      var a=[],q=()=>rd.readEntries(b=>b.length?(a.push(...b),q()):r(a));
-      q();
-    });
-    for(var e of a)await walk(e,path+en.name+'/',out);
+    for (const entry of entries) {
+      await walk(entry, path + en.name + '/', out);
+    }
   }
 }
+
+// ── Path Logic ─────────────────────────────────────────────────────
+function strip(files) {
+  if (!files.length) return [];
+  let prefix = files[0].path;
+  for (let i = 1; i < files.length; i++) {
+    while (prefix && !files[i].path.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  }
+  const out = [];
+  for (const f of files) {
+    let rel = f.path.substring(prefix.length);
+    if (rel && !rel.endsWith('/')) {
+      out.push({ path: '/' + rel, data: f.data });
+    }
+  }
+  if (out.length && out[0].path.toLowerCase().startsWith('/data/')) {
+    for (const f of out) f.path = f.path.substring(5);
+  }
+  return out;
+}
+
+// ── RSDKv5 Builder ──────────────────────────────────────────────
+function buildRSDK(entries) {
+  if (!entries.length) return new Uint8Array(0);
+  let headerSize = 16;
+  for (const f of entries) {
+    headerSize += f.path.length + 1;
+    headerSize = (headerSize + 3) & ~3;
+    headerSize += 28;
+  }
+  let dataOffset = headerSize;
+  const infos = [];
+  for (const f of entries) {
+    const size = f.data.byteLength;
+    infos.push({ path: f.path, offset: dataOffset, size: size, enc: 0, md5: new Uint8Array(16) });
+    dataOffset += size;
+  }
+  const out = new Uint8Array(dataOffset);
+  const dv = new DataView(out.buffer);
+  out[0] = 0x52; out[1] = 0x53; out[2] = 0x4B; out[3] = 0x44; out[4] = 0x76; out[5] = 0x35;
+  dv.setUint32(8, entries.length, true);
+  dv.setUint32(12, 0, true);
+  let p = 16;
+  for (let i = 0; i < entries.length; i++) {
+    const name = entries[i].path;
+    for (let j = 0; j < name.length; j++) {
+      out[p++] = name.charCodeAt(j) ^ (((i + 1) * 7 + j) & 0xFF);
+    }
+    out[p++] = 0;
+    p = (p + 3) & ~3;
+    dv.setUint32(p, infos[i].size, true); p += 4;
+    dv.setUint32(p, infos[i].offset, true); p += 4;
+    dv.setUint32(p, 0, true); p += 4;
+    p += 16;
+  }
+  for (let i = 0; i < entries.length; i++) {
+    out.set(entries[i].data, infos[i].offset);
+  }
+  return out;
+}
+
+// ── RSDKv5 Parser ──────────────────────────────────────────────
+function parseRSDK(buf) {
+  const d = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (d.getUint32(0, true) !== 0x444B5352 || d.getUint16(4, true) !== 0x3576) {
+    throw new Error('Not a valid RSDKv5 file (wrong magic bytes)');
+  }
+  const n = d.getUint32(8, true);
+  let h = d.getUint32(12, true);
+  const maxH = Math.floor((buf.length - 16) / 4);
+  if (h > maxH) h = 0;
+  let p = 16 + h * 4;
+  if (p >= buf.length) throw new Error('Invalid RSDK header');
+  const files = [];
+  for (let e = 0; e < n; e++) {
+    const rn = [];
+    while (buf[p] && p < buf.length) rn.push(buf[p++]);
+    p = (p + 4) & ~3;
+    if (p + 28 > buf.length) break;
+    const sz = d.getUint32(p, true), o = d.getUint32(p + 4, true), en = d.getUint32(p + 8, true); p += 28;
+    let name = '';
+    try {
+      for (let j = 0; j < rn.length; j++) {
+        name += String.fromCharCode(rn[j] ^ (((e + 1) * 7 + j) & 0xFF));
+      }
+    } catch (e) {}
+    files.push({ name, path: '/' + name, offset: o, size: sz, enc: en });
+  }
+  return files;
+}
+
+// ── Build Logic ────────────────────────────────────────────────────────
+async function doBuild() {
+  var logEl = document.getElementById('log');
+  logEl.textContent = 'Ready for files...\n';
+  logEl.classList.remove('log-ok','log-err');
+
+  var btn = document.getElementById('btnBuild');
+  btn.disabled = true;
+  btn.textContent = 'Building...';
+
+  try {
+    var filesToBuild = window.__mml_files;
+    if (!filesToBuild || !filesToBuild.length) {
+      log('log', 'No files loaded! Use the drop zone or file picker.', 'err');
+      btn.disabled = false; btn.textContent = 'Build and Download .rsdk';
+      return;
+    }
+
+    log('log', 'Sorting '+filesToBuild.length+' files...');
+    await new Promise(r => setTimeout(r, 10));
+
+    var entries = strip(filesToBuild);
+    if (!entries.length) {
+      throw new Error('No valid data files found. Ensure you dropped the mod root folder (containing Data/ subfolder).');
+    }
+
+    log('log', 'Found '+entries.length+' data files. Building RSDK header...');
+    await new Promise(r => setTimeout(r, 10));
+    var rsdk = buildRSDK(entries);
+
+    log('log', 'Header: RSDKv5\nFiles: '+entries.length+'\nSize: '+formatBytes(rsdk.byteLength)+'\n');
+    await new Promise(r => setTimeout(r, 10));
+
+    var blob = new Blob([rsdk], { type: 'application/octet-stream' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = (window.__mml_label || 'mod') + '.rsdk';
+    a.click();
+    URL.revokeObjectURL(url);
+
+    log('log', '\n✅ SUCCESS! Downloading ' + a.download + ' (' + formatBytes(rsdk.byteLength) + ')', 'ok');
+    
+  } catch (e) {
+    log('log', '\n❌ ERROR: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Build and Download .rsdk';
+  }
+}
+
+// ── Extract Logic ──────────────────────────────────────────────────
+async function doExtract() {
+  var logEl = document.getElementById('log2');
+  logEl.textContent = 'Ready for .rsdk file...\n';
+  logEl.classList.remove('log-ok','log-err');
+
+  var btn = document.getElementById('btnExtract');
+  btn.disabled = true;
+  btn.textContent = 'Extracting...';
+
+  try {
+    var file = window.__mml_extract_file;
+    if (!file) {
+      log('log2', 'No .rsdk loaded! Use the drop zone or file picker.', 'err');
+      btn.disabled = false; btn.textContent = 'Extract and Download .zip';
+      return;
+    }
+
+    log('log2', 'Parsing RSDK ('+formatBytes(file.byteLength)+')...');
+    var files = parseRSDK(file);
+    log('log2', 'Found '+files.length+' files inside. Extracting paths...');
+
+    var zip = {};
+    for (const f of files) zip[f.path] = f.data;
+
+    log('log2', 'Creating ZIP archive ('+files.length+' files)...');
+    await new Promise(r => setTimeout(r, 10));
+
+    var blob = fflate.zipSync(zip, { level: 1 });
+    log('log2', 'ZIP size: '+formatBytes(blob.byteLength)+'\n');
+
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    var name = (window.__mml_extract_label || 'Data') + '.zip';
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    log('log2', '\n✅ SUCCESS! Downloading ' + name + ' (' + formatBytes(blob.byteLength) + ')', 'ok');
+
+  } catch (e) {
+    log('log2', '\n❌ ERROR: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Extract and Download .zip';
+  }
+}
+
+// ── File Handlers ────────────────────────────────────────────────────
+var fi = document.getElementById('fi');
+var ri = document.getElementById('ri');
+
+fi.onchange = function(e) {
+  if (!fi.files.length) return;
+  var readPromises = [];
+  for (var i = 0; i < fi.files.length; i++) readPromises.push(fi.files[i].arrayBuffer());
+  Promise.all(readPromises).then(arrayBuffers => {
+    var files = [];
+    for (var j = 0; j < fi.files.length; j++) {
+      files.push({ name: fi.files[j].name, path: fi.files[j].webkitRelativePath, data: new Uint8Array(arrayBuffers[j]) });
+    }
+    window.__mml_files = files;
+    window.__mml_label = fi.files[0].webkitRelativePath.split('/')[0] || 'mod';
+    doBuild();
+  });
+};
+
+ri.onchange = function(e) {
+  if (!ri.files.length) return;
+  ri.files[0].arrayBuffer().then(buf => {
+    window.__mml_extract_file = new Uint8Array(buf);
+    window.__mml_extract_label = ri.files[0].name.replace(/\.(rsdk|data)$/i, '');
+    doExtract();
+  });
+};
+
+// ── Tabs ─────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
+    document.getElementById('p-' + tab.dataset.tab).classList.remove('hidden');
+  });
+});
+
+// ── Drop Zones ─────────────────────────────────────────────────
+var dz1 = document.getElementById('dz');
+var dz2 = document.getElementById('dz2');
+
+dz1.onclick = () => fi.click();
+dz1.ondragover = e => { e.preventDefault(); dz1.classList.add('ov'); };
+dz1.ondragleave = () => dz1.classList.remove('ov');
+dz1.ondrop = async e => {
+  e.preventDefault(); dz1.classList.remove('ov');
+  var items = e.dataTransfer.items;
+  var files = [];
+  for (var i = 0; i < items.length; i++) {
+    var en = items[i].webkitGetAsEntry && items[i].webkitGetAsEntry();
+    if (en) await walk(en, '', files);
+    else {
+      var fi = items[i].getAsFile();
+      if (fi) files.push({ name: fi.name, path: fi.name, data: new Uint8Array(await fi.arrayBuffer()) });
+    }
+  }
+  if (files.length) {
+    window.__mml_files = files;
+    window.__mml_label = files[0].path.split('/')[0] || 'mod';
+    doBuild();
+  }
+};
+
+dz2.onclick = () => ri.click();
+dz2.ondragover = e => { e.preventDefault(); dz2.classList.add('ov'); };
+dz2.ondragleave = () => dz2.classList.remove('ov');
+dz2.ondrop = async e => {
+  e.preventDefault(); dz2.classList.remove('ov');
+  var items = e.dataTransfer.items;
+  if (items.length === 1) {
+    var en = items[0].webkitGetAsEntry && items[0].webkitGetAsEntry();
+    if (en) {
+      var file = await new Promise(r => en.file(r));
+      window.__mml_extract_file = new Uint8Array(file);
+      window.__mml_extract_label = en.name.replace(/\.(rsdk|data)$/i, '');
+      doExtract();
+    } else {
+      var fi = items[0].getAsFile();
+      if (fi) {
+        fi.arrayBuffer().then(buf => {
+          window.__mml_extract_file = new Uint8Array(buf);
+          window.__mml_extract_label = fi.name.replace(/\.(rsdk|data)$/i, '');
+          doExtract();
+        });
+      }
+    }
+  }
+};
 </script>
 </body>
 </html>
